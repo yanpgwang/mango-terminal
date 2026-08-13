@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Verify
+        run: |
+          go test ./...
+          go vet ./...
+      - name: Build release archives
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist package
+          commit="${GITHUB_SHA:0:12}"
+          build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          ldflags="-s -w -X main.version=${VERSION} -X main.commit=${commit} -X main.buildDate=${build_date}"
+
+          build_archive() {
+            goos="$1"
+            goarch="$2"
+            binary="mango"
+            extension="tar.gz"
+            if [ "$goos" = "windows" ]; then
+              binary="mango.exe"
+              extension="zip"
+            fi
+            rm -rf package/*
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+              go build -trimpath -ldflags "$ldflags" -o "package/$binary" ./cmd/mango
+            cp README.md LICENSE package/
+            archive="mango_${VERSION}_${goos}_${goarch}.${extension}"
+            if [ "$extension" = "zip" ]; then
+              (cd package && zip -q "../dist/$archive" "$binary" README.md LICENSE)
+            else
+              tar -C package -czf "dist/$archive" "$binary" README.md LICENSE
+            fi
+          }
+
+          build_archive darwin arm64
+          build_archive darwin amd64
+          build_archive linux arm64
+          build_archive linux amd64
+          build_archive windows amd64
+          (cd dist && sha256sum mango_* > checksums.txt)
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        run: gh release create "$VERSION" dist/* --verify-tag --generate-notes --title "Mango Terminal $VERSION"

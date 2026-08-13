@@ -10,14 +10,25 @@ import (
 	"github.com/yanpgwang/mango-terminal/internal/ui"
 )
 
+var (
+	version   = "dev"
+	commit    = "none"
+	buildDate = "unknown"
+)
+
 func main() {
 	flags := flag.NewFlagSet("mango", flag.ExitOnError)
 	baseURL := flags.String("url", envOr("MANGO_URL", "http://127.0.0.1:8080"), "Mango API base URL")
 	apiKey := flags.String("api-key", os.Getenv("MANGO_API_KEY"), "Mango API key")
+	showVersion := flags.Bool("version", false, "Print the Mango Terminal version")
 	_ = flags.Parse(os.Args[1:])
 
 	attachID := ""
 	arguments := flags.Args()
+	if *showVersion || (len(arguments) == 1 && arguments[0] == "version") {
+		fmt.Printf("mango %s (%s, %s)\n", version, commit, buildDate)
+		return
+	}
 	if len(arguments) > 0 {
 		if arguments[0] != "attach" || len(arguments) != 2 {
 			fmt.Fprintln(os.Stderr, "usage: mango [flags] [attach SESSION_ID]")

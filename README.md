@@ -39,7 +39,27 @@ The current vertical slice supports:
 - a command palette and keyboard focus modes;
 - durable built-in tool permission review, including child-owned actions.
 
-## Run
+## Install
+
+macOS and Linux:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/yanpgwang/mango-terminal/main/install.sh | sh
+```
+
+Windows binaries and checksums are available from
+[GitHub Releases](https://github.com/yanpgwang/mango-terminal/releases).
+
+Then launch the Session inbox with one command:
+
+```sh
+mango
+```
+
+Mango connects to `http://127.0.0.1:8080` by default. Point it at another
+control plane with `MANGO_URL` and, when required, `MANGO_API_KEY`.
+
+## Run from source
 
 ```sh
 go run ./cmd/mango --url http://127.0.0.1:8080
