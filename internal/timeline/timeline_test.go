@@ -64,3 +64,38 @@ func TestProjectSuppressesBookkeepingSpans(t *testing.T) {
 		t.Fatalf("bookkeeping projection = %#v, want none", items)
 	}
 }
+
+func TestProjectPairsToolResultWithToolCall(t *testing.T) {
+	items := Project(api.Thread{ID: "thread"}, []api.Event{
+		{
+			"id": "call", "type": "agent.tool_use", "name": "bash",
+			"input": map[string]any{"command": "pwd"}, "evaluated_permission": "allow",
+		},
+		{
+			"id": "result", "type": "agent.tool_result", "tool_use_id": "call",
+			"content": []any{map[string]any{"type": "text", "text": "/workspace"}},
+		},
+	})
+	if len(items) != 1 {
+		t.Fatalf("items = %#v, want one paired tool item", items)
+	}
+	if items[0].Kind != KindTool || items[0].Status != "complete" || items[0].Result != "/workspace" {
+		t.Fatalf("paired tool = %#v", items[0])
+	}
+}
+
+func TestProjectPairsMCPResultUsingMCPReference(t *testing.T) {
+	items := Project(api.Thread{ID: "thread"}, []api.Event{
+		{
+			"id": "mcp-call", "type": "agent.mcp_tool_use", "name": "search",
+			"input": map[string]any{"query": "Mango"}, "evaluated_permission": "allow",
+		},
+		{
+			"id": "mcp-result", "type": "agent.mcp_tool_result", "mcp_tool_use_id": "mcp-call",
+			"content": []any{map[string]any{"type": "text", "text": "found"}},
+		},
+	})
+	if len(items) != 1 || items[0].Result != "found" || items[0].Status != "complete" {
+		t.Fatalf("items = %#v", items)
+	}
+}

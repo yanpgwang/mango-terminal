@@ -39,8 +39,11 @@ Timeline items are semantic rather than raw event rows:
 
 ### Interactive execution
 
-- expandable tool cards with typed renderers;
-- permission overlay with child ownership;
+- [x] expandable paired tool calls and results;
+- [x] permission overlay with child ownership for built-in confirmations;
+- [x] semantic delegation and report components;
+- [x] timeline, composer, and Thread-roster focus modes;
+- [x] command palette for Session controls;
 - custom and self-hosted tool results;
 - robust delta reconciliation and reconnect cursors;
 - background activity summaries and terminal notifications.
@@ -62,4 +65,3 @@ Timeline items are semantic rather than raw event rows:
 
 Agent, Environment, Skill, Memory, Vault, and Deployment administration stays
 outside the terminal unless a concrete user workflow requires it.
-

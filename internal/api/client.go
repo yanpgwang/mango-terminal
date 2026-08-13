@@ -137,6 +137,27 @@ func (c *Client) Interrupt(ctx context.Context, sessionID, threadID string) erro
 	return c.sendEvents(ctx, sessionID, []map[string]any{event})
 }
 
+func (c *Client) ConfirmTool(
+	ctx context.Context,
+	sessionID string,
+	threadID string,
+	toolUseID string,
+	result string,
+	denyMessage string,
+) error {
+	event := map[string]any{
+		"type": "user.tool_confirmation", "tool_use_id": toolUseID,
+		"result": result,
+	}
+	if threadID != "" {
+		event["session_thread_id"] = threadID
+	}
+	if result == "deny" && strings.TrimSpace(denyMessage) != "" {
+		event["deny_message"] = strings.TrimSpace(denyMessage)
+	}
+	return c.sendEvents(ctx, sessionID, []map[string]any{event})
+}
+
 func (c *Client) sendEvents(
 	ctx context.Context,
 	sessionID string,

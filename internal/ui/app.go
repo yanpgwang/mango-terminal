@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -16,6 +17,18 @@ import (
 const (
 	viewInbox = iota
 	viewAttached
+)
+
+const (
+	focusComposer = iota
+	focusTimeline
+	focusThreads
+)
+
+const (
+	overlayNone = iota
+	overlayCommands
+	overlayPermissions
 )
 
 type inboxLoaded struct {
@@ -56,6 +69,12 @@ type preview struct {
 	content string
 }
 
+type pendingAction struct {
+	event    api.Event
+	kind     string
+	threadID string
+}
+
 type Model struct {
 	client *api.Client
 
@@ -75,8 +94,15 @@ type Model struct {
 	previews     map[string]*preview
 	unread       map[string]int
 
-	viewport viewport.Model
-	composer textarea.Model
+	viewport      viewport.Model
+	composer      textarea.Model
+	timeline      timelineView
+	spinner       spinner.Model
+	theme         theme
+	focus         int
+	overlay       int
+	overlayCursor int
+	pending       []pendingAction
 
 	loading bool
 	status  string
@@ -89,6 +115,7 @@ type Model struct {
 }
 
 func New(client *api.Client, directAttach string) Model {
+	colors := defaultTheme()
 	composer := textarea.New()
 	composer.Placeholder = "Send a message to the primary Agent"
 	composer.Prompt = "> "
@@ -98,25 +125,39 @@ func New(client *api.Client, directAttach string) Model {
 	composer.MaxHeight = 5
 	composer.CharLimit = 64 << 10
 	composer.SetVirtualCursor(true)
+	composer.SetStyles(colors.textareaStyles())
 	composer.Focus()
 
 	transcript := viewport.New()
 	transcript.SoftWrap = true
 	transcript.FillHeight = true
+	transcript.MouseWheelEnabled = true
+	workSpinner := spinner.New(
+		spinner.WithSpinner(spinner.Spinner{
+			Frames: []string{"∙  ", "•• ", "•••", " ••", "  ∙", "   "},
+			FPS:    140 * time.Millisecond,
+		}),
+		spinner.WithStyle(colors.dim),
+	)
 
 	return Model{
 		client: client, view: viewInbox, loading: true,
 		events: map[string][]api.Event{}, previews: map[string]*preview{},
 		unread: map[string]int{}, viewport: transcript, composer: composer,
+		timeline: newTimelineView(), spinner: workSpinner, theme: colors,
+		focus:        focusComposer,
 		directAttach: strings.TrimSpace(directAttach),
 	}
 }
 
 func (m Model) Init() tea.Cmd {
+	var load tea.Cmd
 	if m.directAttach != "" {
-		return m.loadAttached(m.directAttach)
+		load = m.loadAttached(m.directAttach)
+	} else {
+		load = m.loadInbox()
 	}
-	return m.loadInbox()
+	return tea.Batch(load, m.spinner.Tick)
 }
 
 func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
@@ -126,6 +167,13 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize()
 		m.renderTimeline()
 		return m, nil
+	case spinner.TickMsg:
+		var command tea.Cmd
+		m.spinner, command = m.spinner.Update(msg)
+		if m.view == viewAttached && m.previews[m.currentThreadID()] != nil {
+			m.renderTimeline()
+		}
+		return m, command
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" || msg.String() == "ctrl+q" {
 			m.stopStreams()
@@ -144,10 +192,19 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			return m, nil
 		}
+		selectedThread := ""
+		if m.session != nil && m.session.ID == msg.session.ID {
+			selectedThread = m.currentThreadID()
+		}
 		m.session = &msg.session
 		m.threads, m.events = msg.threads, msg.events
-		m.threadCursor = primaryIndex(m.threads)
+		m.rebuildPending()
+		m.threadCursor = threadIndex(m.threads, selectedThread)
+		if m.threadCursor < 0 {
+			m.threadCursor = primaryIndex(m.threads)
+		}
 		m.view, m.status = viewAttached, "attached"
+		m.focus, m.overlay = focusComposer, overlayNone
 		m.composer.Focus()
 		m.renderTimeline()
 		return m, tea.Batch(m.restartStreams(), m.refreshAfter())
@@ -188,6 +245,9 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading, m.err = false, msg.err
 		if msg.err == nil {
 			m.status = msg.label
+			if m.view == viewAttached && m.session != nil {
+				return m, m.loadAttached(m.session.ID)
+			}
 		}
 		return m, nil
 	case refreshTick:
@@ -255,12 +315,22 @@ func (m Model) updateInbox(message tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) updateAttached(message tea.Msg) (tea.Model, tea.Cmd) {
 	key, ok := message.(tea.KeyPressMsg)
 	if ok {
+		if m.overlay != overlayNone {
+			return m.updateOverlay(key)
+		}
 		switch key.String() {
 		case "esc":
-			m.stopStreams()
-			m.view, m.session = viewInbox, nil
-			m.loading, m.err = true, nil
-			return m, m.loadInbox()
+			if m.focus == focusComposer {
+				m.composer.Blur()
+				m.focus = focusTimeline
+				m.timeline.active = true
+				m.renderTimeline()
+			} else {
+				m.focus = focusComposer
+				m.timeline.active = false
+				return m, m.composer.Focus()
+			}
+			return m, nil
 		case "tab":
 			m.selectThread(1)
 			return m, nil
@@ -279,20 +349,86 @@ func (m Model) updateAttached(message tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+x":
 			m.loading = true
 			return m, m.interrupt(m.currentThreadID())
-		case "ctrl+shift+x":
-			m.loading = true
-			return m, m.interrupt("")
+		case "ctrl+k":
+			m.overlay, m.overlayCursor = overlayCommands, 0
+			m.composer.Blur()
+			return m, nil
+		case "ctrl+p":
+			if len(m.pending) > 0 {
+				m.overlay, m.overlayCursor = overlayPermissions, 0
+				m.composer.Blur()
+			}
+			return m, nil
+		case "ctrl+l":
+			m.focus = focusThreads
+			m.timeline.active = false
+			m.composer.Blur()
+			return m, nil
+		case "ctrl+t":
+			m.focus = focusTimeline
+			m.timeline.active = true
+			m.composer.Blur()
+			m.renderTimeline()
+			return m, nil
+		case "i":
+			if m.focus != focusComposer {
+				m.focus = focusComposer
+				m.timeline.active = false
+				m.renderTimeline()
+				return m, m.composer.Focus()
+			}
 		case "enter":
-			content := strings.TrimSpace(m.composer.Value())
-			if content != "" {
-				m.composer.Reset()
-				m.loading = true
-				return m, m.sendMessage(content)
+			if m.focus == focusComposer {
+				content := strings.TrimSpace(m.composer.Value())
+				if content != "" {
+					m.composer.Reset()
+					m.loading = true
+					return m, m.sendMessage(content)
+				}
+			} else if m.focus == focusTimeline {
+				m.timeline.toggle()
+				m.renderTimeline()
+				return m, nil
+			}
+		case " ":
+			if m.focus == focusTimeline {
+				m.timeline.toggle()
+				m.renderTimeline()
+				return m, nil
+			}
+		case "up", "k":
+			if m.focus == focusTimeline {
+				m.timeline.moveSelection(-1)
+				m.viewport.ScrollUp(3)
+				m.renderTimeline()
+				return m, nil
+			}
+			if m.focus == focusThreads {
+				m.selectThread(-1)
+				return m, nil
+			}
+		case "down", "j":
+			if m.focus == focusTimeline {
+				m.timeline.moveSelection(1)
+				m.viewport.ScrollDown(3)
+				m.renderTimeline()
+				return m, nil
+			}
+			if m.focus == focusThreads {
+				m.selectThread(1)
+				return m, nil
 			}
 		}
 	}
 	var composerCommand, viewportCommand tea.Cmd
-	m.composer, composerCommand = m.composer.Update(message)
+	if m.focus == focusComposer {
+		previousHeight := m.composer.Height()
+		m.composer, composerCommand = m.composer.Update(message)
+		if m.composer.Height() != previousHeight {
+			m.resize()
+			m.renderTimeline()
+		}
+	}
 	m.viewport, viewportCommand = m.viewport.Update(message)
 	return m, tea.Batch(composerCommand, viewportCommand)
 }
@@ -333,6 +469,7 @@ func (m *Model) applyStream(update api.StreamUpdate) {
 			delete(m.previews, update.ThreadID)
 		}
 	}
+	m.rebuildPending()
 	if update.ThreadID == m.currentThreadID() {
 		m.renderTimeline()
 	}
@@ -366,7 +503,58 @@ func (m *Model) resize() {
 	_, mainWidth := paneWidths(m.width)
 	m.composer.SetWidth(max(20, mainWidth-2))
 	m.viewport.SetWidth(max(20, mainWidth-2))
-	m.viewport.SetHeight(max(5, m.height-m.composer.Height()-8))
+	m.viewport.SetHeight(max(5, m.height-m.composer.Height()-9))
+	m.timeline.width = max(20, mainWidth-4)
+}
+
+func (m *Model) rebuildPending() {
+	var primaryEvents []api.Event
+	for _, thread := range m.threads {
+		if thread.Primary() {
+			primaryEvents = m.events[thread.ID]
+			break
+		}
+	}
+	byID := make(map[string]api.Event, len(primaryEvents))
+	var required []string
+	for _, event := range primaryEvents {
+		byID[stringValue(event["id"])] = event
+		if stringValue(event["type"]) != "session.status_idle" {
+			continue
+		}
+		stopReason, _ := event["stop_reason"].(map[string]any)
+		if stringValue(stopReason["type"]) != "requires_action" {
+			required = nil
+			continue
+		}
+		values, _ := stopReason["event_ids"].([]any)
+		required = required[:0]
+		for _, value := range values {
+			if id := stringValue(value); id != "" {
+				required = append(required, id)
+			}
+		}
+	}
+	m.pending = m.pending[:0]
+	for _, id := range required {
+		event, ok := byID[id]
+		if !ok {
+			continue
+		}
+		kind := "tool_result"
+		switch stringValue(event["type"]) {
+		case "agent.custom_tool_use":
+			kind = "custom_tool_result"
+		case "agent.tool_use", "agent.mcp_tool_use":
+			if stringValue(event["evaluated_permission"]) == "ask" {
+				kind = "tool_confirmation"
+			}
+		}
+		m.pending = append(m.pending, pendingAction{
+			event: event, kind: kind, threadID: stringValue(event["session_thread_id"]),
+		})
+	}
+	m.overlayCursor = clamp(m.overlayCursor, 0, len(m.pending)-1)
 }
 
 func primaryIndex(threads []api.Thread) int {

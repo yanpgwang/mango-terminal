@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/yanpgwang/mango-terminal/internal/api"
 )
@@ -37,6 +38,9 @@ type Item struct {
 	Status   string
 	ThreadID string
 	RawType  string
+	Result   string
+	IsError  bool
+	Time     time.Time
 }
 
 type Preview struct {
@@ -49,6 +53,16 @@ func Project(thread api.Thread, events []api.Event) []Item {
 	for _, event := range events {
 		item, ok := projectEvent(thread, event)
 		if ok {
+			if item.Kind == KindResult || item.Kind == KindError {
+				reference := first(
+					stringValue(event["tool_use_id"]),
+					stringValue(event["mcp_tool_use_id"]),
+					stringValue(event["custom_tool_use_id"]),
+				)
+				if mergeToolResult(items, reference, item) {
+					continue
+				}
+			}
 			items = append(items, item)
 		}
 	}
@@ -63,6 +77,7 @@ func projectEvent(thread api.Thread, event api.Event) (Item, bool) {
 		RawType:  typ,
 		Body:     contentText(event["content"]),
 		Agent:    thread.Agent.Name,
+		Time:     eventTime(event),
 	}
 	switch typ {
 	case "user.message":
@@ -98,6 +113,7 @@ func projectEvent(thread api.Thread, event api.Event) (Item, bool) {
 		item.Kind, item.Label = KindResult, "Tool result"
 		if boolValue(event["is_error"]) {
 			item.Kind, item.Label = KindError, "Tool error"
+			item.IsError = true
 		}
 	case "session.error":
 		item.Kind, item.Label = KindError, "Session error"
@@ -115,6 +131,41 @@ func projectEvent(thread api.Thread, event api.Event) (Item, bool) {
 		return Item{}, false
 	}
 	return item, true
+}
+
+func mergeToolResult(items []Item, reference string, result Item) bool {
+	if reference == "" {
+		return false
+	}
+	for index := len(items) - 1; index >= 0; index-- {
+		if items[index].ID != reference ||
+			(items[index].Kind != KindTool && items[index].Kind != KindPermission) {
+			continue
+		}
+		items[index].Result = result.Body
+		items[index].IsError = result.IsError
+		if result.IsError {
+			items[index].Status = "error"
+		} else {
+			items[index].Status = "complete"
+		}
+		return true
+	}
+	return false
+}
+
+func eventTime(event api.Event) time.Time {
+	for _, key := range []string{"processed_at", "created_at"} {
+		value := stringValue(event[key])
+		if value == "" {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339Nano, value)
+		if err == nil {
+			return parsed
+		}
+	}
+	return time.Time{}
 }
 
 func contentText(value any) string {

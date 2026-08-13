@@ -25,16 +25,19 @@ Mango control plane
     `-- sandbox, Skills, Memory, Vaults, and Files
 ```
 
-The first vertical slice supports:
+The current vertical slice supports:
 
 - a remote Session inbox;
 - attaching to an existing durable Session;
 - primary and child Thread ledgers;
 - live streams for every Thread, including background children;
 - explicit delegation and report timeline items;
+- paired, expandable tool calls and results;
 - privacy-safe thinking state and incremental answer previews;
 - sending messages to the primary Thread;
-- targeted and Session-wide interrupts.
+- targeted and Session-wide interrupts;
+- a command palette and keyboard focus modes;
+- durable built-in tool permission review, including child-owned actions.
 
 ## Run
 
@@ -50,6 +53,18 @@ go run ./cmd/mango --url http://127.0.0.1:8080 attach sesn_...
 
 For authenticated deployments, set `MANGO_API_KEY` or pass `--api-key`.
 
+Inside an attached Session:
+
+| Key | Action |
+| --- | --- |
+| `Tab` / `Shift+Tab` | Move across the coordinator and specialist Threads |
+| `Esc` | Move from the composer into the observable timeline |
+| `i` | Return to the composer |
+| `Space` | Expand or collapse the selected timeline item |
+| `Ctrl+K` | Open the Session command palette |
+| `Ctrl+P` | Review durable permission actions |
+| `Ctrl+X` | Interrupt the selected Thread |
+
 ## Status
 
 This repository is an early product foundation. See
@@ -64,4 +79,3 @@ not copy or depend on Crush source code. See [ARCHITECTURE.md](ARCHITECTURE.md).
 ## License
 
 Apache-2.0.
-

@@ -112,3 +112,14 @@ func (m Model) interrupt(threadID string) tea.Cmd {
 		return actionFinished{label: label, err: err}
 	}
 }
+
+func (m Model) confirmTool(action pendingAction, result, denyMessage string) tea.Cmd {
+	sessionID := m.session.ID
+	toolUseID := stringValue(action.event["id"])
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		err := m.client.ConfirmTool(ctx, sessionID, action.threadID, toolUseID, result, denyMessage)
+		return actionFinished{label: "permission " + result, err: err}
+	}
+}

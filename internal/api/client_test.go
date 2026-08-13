@@ -66,3 +66,32 @@ func TestClientSendsTargetedInterrupt(t *testing.T) {
 		t.Fatalf("event = %#v", event)
 	}
 }
+
+func TestClientConfirmsChildToolWithAuthoritativeFields(t *testing.T) {
+	var event map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body struct {
+			Events []map[string]any `json:"events"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		event = body.Events[0]
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	client, err := New(Config{BaseURL: server.URL, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ConfirmTool(
+		context.Background(), "sesn_one", "sthr_child", "sevt_tool", "deny", "not now",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if event["type"] != "user.tool_confirmation" || event["tool_use_id"] != "sevt_tool" ||
+		event["session_thread_id"] != "sthr_child" || event["result"] != "deny" ||
+		event["deny_message"] != "not now" {
+		t.Fatalf("event = %#v", event)
+	}
+}
