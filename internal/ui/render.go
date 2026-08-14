@@ -248,9 +248,49 @@ func (m Model) linesAboveComposer(width int) []string {
 	}
 	return []string{
 		m.renderChatHeader(width),
-		lipgloss.NewStyle().Width(width).Height(m.chat.Height()).Padding(0, 1).Render(m.chat.View()),
-		m.renderConversationInfo(width),
+		m.renderTranscript(width, m.transcriptBodyHeight()),
 	}
+}
+
+// transcriptBodyHeight is what remains for the timeline + event body after
+// header, composer, help, and slack. Kept as a helper so viewCursor's line
+// math stays in one place.
+func (m Model) transcriptBodyHeight() int {
+	// Chat: header (2) + composer + help (1) + slack (3). Timeline lives INSIDE
+	// this budget so the two-column body absorbs whatever remains after we
+	// paint one row of cells for it.
+	return max(6, m.height-m.composerHeight()-6)
+}
+
+// renderTranscript is the Anthropic-Console-inspired chat view: a colored
+// timeline strip on top, then a two-column layout with the event list on the
+// left and a detail panel for the currently selected event on the right.
+func (m Model) renderTranscript(width, height int) string {
+	items := m.transcriptItems()
+	cursor := m.transcriptCursor
+	if cursor < 0 {
+		cursor = 0
+	}
+	if len(items) > 0 && cursor >= len(items) {
+		cursor = len(items) - 1
+	}
+	timeline := m.renderTimelineStrip(width, items, cursor)
+	bodyHeight := max(3, height-lipgloss.Height(timeline)-1)
+	focusedList := m.focus == focusChat
+	if m.compact || width < 100 {
+		list := m.renderTranscriptEventList(width, bodyHeight, items, cursor, focusedList)
+		return timeline + "\n" + list
+	}
+	listWidth := width * 45 / 100
+	detailWidth := width - listWidth - 2
+	list := m.renderTranscriptEventList(listWidth, bodyHeight, items, cursor, focusedList)
+	var detailItem *feed.Item
+	if len(items) > 0 {
+		detailItem = &items[cursor]
+	}
+	detail := m.renderTranscriptDetail(detailWidth, bodyHeight, detailItem)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, list, "  ", detail)
+	return timeline + "\n" + body
 }
 
 // renderChatHeader labels the zoomed Thread and shows the way back to the
@@ -496,18 +536,9 @@ func (m Model) renderInbox() string {
 }
 
 func (m Model) renderInboxMain(width, height int) string {
-	endpoint := first(strings.TrimSpace(m.options.Endpoint), "Mango Cloud")
-	// Top strip: brand + endpoint + fleet stats + tagline. This is the "who am
-	// I connected to and what's the fleet doing" band, kept identical whether
-	// or not a session is selected.
-	header := lipgloss.NewStyle().Padding(0, 2).Render(strings.Join([]string{
-		m.brandLogo(true),
-		"",
-		gradientText(lipgloss.NewStyle(), "Cloud sessions", true, m.theme.accent, m.theme.blue),
-		m.theme.dim.Render(truncate(endpoint, width-4)),
-		"",
-		m.renderInboxStatus(width - 4),
-	}, "\n"))
+	// Fleet status is the only band the operator needs — brand and endpoint URL
+	// were pure chrome on every render, so they moved out of the way.
+	header := lipgloss.NewStyle().Padding(1, 2, 0, 2).Render(m.renderInboxStatus(width - 4))
 
 	// Toolbar: three action pills on one row.
 	toolbar := lipgloss.NewStyle().Padding(0, 2).Render(m.renderInboxToolbar())
