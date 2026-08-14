@@ -248,49 +248,9 @@ func (m Model) linesAboveComposer(width int) []string {
 	}
 	return []string{
 		m.renderChatHeader(width),
-		m.renderTranscript(width, m.transcriptBodyHeight()),
+		lipgloss.NewStyle().Width(width).Height(m.chat.Height()).Padding(0, 1).Render(m.chat.View()),
+		m.renderConversationInfo(width),
 	}
-}
-
-// transcriptBodyHeight is what remains for the timeline + event body after
-// header, composer, help, and slack. Kept as a helper so viewCursor's line
-// math stays in one place.
-func (m Model) transcriptBodyHeight() int {
-	// Chat: header (2) + composer + help (1) + slack (3). Timeline lives INSIDE
-	// this budget so the two-column body absorbs whatever remains after we
-	// paint one row of cells for it.
-	return max(6, m.height-m.composerHeight()-6)
-}
-
-// renderTranscript is the Anthropic-Console-inspired chat view: a colored
-// timeline strip on top, then a two-column layout with the event list on the
-// left and a detail panel for the currently selected event on the right.
-func (m Model) renderTranscript(width, height int) string {
-	items := m.transcriptItems()
-	cursor := m.transcriptCursor
-	if cursor < 0 {
-		cursor = 0
-	}
-	if len(items) > 0 && cursor >= len(items) {
-		cursor = len(items) - 1
-	}
-	timeline := m.renderTimelineStrip(width, items, cursor)
-	bodyHeight := max(3, height-lipgloss.Height(timeline)-1)
-	focusedList := m.focus == focusChat
-	if m.compact || width < 100 {
-		list := m.renderTranscriptEventList(width, bodyHeight, items, cursor, focusedList)
-		return timeline + "\n" + list
-	}
-	listWidth := width * 45 / 100
-	detailWidth := width - listWidth - 2
-	list := m.renderTranscriptEventList(listWidth, bodyHeight, items, cursor, focusedList)
-	var detailItem *feed.Item
-	if len(items) > 0 {
-		detailItem = &items[cursor]
-	}
-	detail := m.renderTranscriptDetail(detailWidth, bodyHeight, detailItem)
-	body := lipgloss.JoinHorizontal(lipgloss.Top, list, "  ", detail)
-	return timeline + "\n" + body
 }
 
 // renderChatHeader labels the zoomed Thread and shows the way back to the
@@ -527,25 +487,22 @@ func (m *Model) renderFeedItem(item feed.Item, selected bool, width int) string 
 func (m Model) renderInbox() string {
 	width, height := max(1, m.width), max(1, m.height)
 	main := m.renderInboxMain(width, height-2)
-	helpText := "←→ pill  ↑↓ list  enter select  n new  / find  r refresh  esc disconnect  ? help  ctrl+c quit"
+	helpText := "←→ pill  ↑↓ list  enter select  n new  / find  r refresh  esc disconnect  ? help"
 	if width < 90 {
-		helpText = "←→ pill  ↑↓ list  enter select  n new  / find  esc"
+		helpText = "←→ pill  ↑↓ list  enter select  n new  esc"
 	}
-	help := lipgloss.NewStyle().Width(width).Padding(0, 2).Render(m.theme.dim.Render(helpText))
-	return lipgloss.NewStyle().Width(width).Height(height).Render(main + "\n" + help)
+	help := m.theme.dim.Render(helpText)
+	fleet := m.renderInboxFleetSummary()
+	footer := lipgloss.NewStyle().Width(width).Padding(0, 2).Render(joinSides(help, fleet, width-4))
+	return lipgloss.NewStyle().Width(width).Height(height).Render(main + "\n" + footer)
 }
 
 func (m Model) renderInboxMain(width, height int) string {
-	// Fleet status is the only band the operator needs — brand and endpoint URL
-	// were pure chrome on every render, so they moved out of the way.
-	header := lipgloss.NewStyle().Padding(1, 2, 0, 2).Render(m.renderInboxStatus(width - 4))
+	// Toolbar sits at the very top of the interactive area — nothing above it
+	// except the terminal's own top margin.
+	toolbar := lipgloss.NewStyle().Padding(1, 2, 0, 2).Render(m.renderInboxToolbar())
 
-	// Toolbar: three action pills on one row.
-	toolbar := lipgloss.NewStyle().Padding(0, 2).Render(m.renderInboxToolbar())
-
-	// The grid gets whatever vertical room the header + toolbar + help leaves.
-	// header height + 1 blank + toolbar (1) + 1 blank
-	used := lipgloss.Height(header) + lipgloss.Height(toolbar) + 2
+	used := lipgloss.Height(toolbar) + 1 // toolbar + blank line
 	gridHeight := max(6, height-used)
 
 	sessionCount := len(m.sessions)
@@ -560,7 +517,34 @@ func (m Model) renderInboxMain(width, height int) string {
 	} else {
 		grid = m.renderInboxList(width, gridHeight)
 	}
-	return strings.Join([]string{header, "", toolbar, "", grid}, "\n")
+	return strings.Join([]string{toolbar, "", grid}, "\n")
+}
+
+// renderInboxFleetSummary is the compact fleet status the footer shows on the
+// right. Loading and error states hijack it because their signal outranks the
+// steady-state counts anyway.
+func (m Model) renderInboxFleetSummary() string {
+	if m.loading {
+		return m.activity(first(m.loadingLabel, "Refreshing Sessions"))
+	}
+	if m.err != nil {
+		return m.theme.danger.Render(trimOneLine(m.err.Error(), 60))
+	}
+	counts := summarizeFleet(m.sessions)
+	parts := []string{m.theme.success.Render("CONNECTED")}
+	if counts.needsAction > 0 {
+		parts = append(parts, m.theme.warning.Render(fmt.Sprintf("%d needs input", counts.needsAction)))
+	}
+	if counts.running > 0 {
+		parts = append(parts, m.theme.active.Render(fmt.Sprintf("%d running", counts.running)))
+	}
+	if counts.idle > 0 {
+		parts = append(parts, m.theme.dim.Render(fmt.Sprintf("%d idle", counts.idle)))
+	}
+	if counts.other > 0 {
+		parts = append(parts, m.theme.dim.Render(fmt.Sprintf("%d other", counts.other)))
+	}
+	return strings.Join(parts, m.theme.dim.Render("  ·  "))
 }
 
 // renderInboxToolbar prints the three top-of-page action buttons. Sitting on
@@ -600,35 +584,6 @@ func (m Model) renderInboxList(width, height int) string {
 	}
 	body := strings.Join(rows, "\n\n")
 	return lipgloss.NewStyle().Width(width).Height(height).Padding(0, 2).Render(body)
-}
-
-// renderInboxStatus is the fleet-scoped line under the endpoint. It replaces
-// the older "CONNECTED · N Sessions" text with a running/idle/needs-action
-// count plus a permanent reminder that managed work outlives this window.
-func (m Model) renderInboxStatus(contentWidth int) string {
-	if m.loading {
-		return m.activity(first(m.loadingLabel, "Refreshing Sessions"))
-	}
-	if m.err != nil {
-		return m.theme.danger.Render(trimOneLine(m.err.Error(), contentWidth))
-	}
-	counts := summarizeFleet(m.sessions)
-	parts := []string{m.theme.success.Render("CONNECTED")}
-	if counts.needsAction > 0 {
-		parts = append(parts, m.theme.warning.Render(fmt.Sprintf("%d needs input", counts.needsAction)))
-	}
-	if counts.running > 0 {
-		parts = append(parts, m.theme.active.Render(fmt.Sprintf("%d running", counts.running)))
-	}
-	if counts.idle > 0 {
-		parts = append(parts, m.theme.dim.Render(fmt.Sprintf("%d idle", counts.idle)))
-	}
-	if counts.other > 0 {
-		parts = append(parts, m.theme.dim.Render(fmt.Sprintf("%d other", counts.other)))
-	}
-	summary := strings.Join(parts, m.theme.dim.Render("  ·  "))
-	tagline := m.theme.dim.Render(truncate("Sessions keep running in the cloud after you detach.", contentWidth))
-	return summary + "\n" + tagline
 }
 
 // renderInboxSessionRow renders one durable Session as a two-line entry. The

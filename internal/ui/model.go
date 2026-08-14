@@ -112,12 +112,11 @@ type Model struct {
 	pendingSignature       string
 	pendingDismissed       bool
 
-	sessions         []mango.Session
-	inboxCursor      int
-	inboxFilter      string
-	lastAttachedID   string
-	boardCursor      int
-	transcriptCursor int
+	sessions       []mango.Session
+	inboxCursor    int
+	inboxFilter    string
+	lastAttachedID string
+	boardCursor    int
 
 	session      *mango.Session
 	threads      []mango.Thread
@@ -652,7 +651,6 @@ func (m Model) zoomFromBoard() (tea.Model, tea.Cmd) {
 		m.itemCursor = -1
 		m.follow = true
 		m.screen = screenChat
-		m.transcriptCursor = m.lastTranscriptIndex()
 		m.setFocus(focusEditor)
 		m.resize()
 		m.renderChat()
@@ -666,34 +664,6 @@ func (m Model) zoomFromBoard() (tea.Model, tea.Cmd) {
 	m.pendingDismissed = false
 	m.openActionDialog(false)
 	return m, nil
-}
-
-// moveTranscriptCursor slides the transcript selection by delta while clamping
-// to the current event ledger. When the cursor reaches the last event it
-// becomes "follow" mode — new events keep it pinned there.
-func (m *Model) moveTranscriptCursor(delta int) {
-	items := m.transcriptItems()
-	if len(items) == 0 {
-		m.transcriptCursor = 0
-		return
-	}
-	next := m.transcriptCursor + delta
-	if next < 0 {
-		next = 0
-	}
-	if next >= len(items) {
-		next = len(items) - 1
-	}
-	m.transcriptCursor = next
-	m.follow = next == len(items)-1
-}
-
-func (m Model) lastTranscriptIndex() int {
-	items := m.transcriptItems()
-	if len(items) == 0 {
-		return 0
-	}
-	return len(items) - 1
 }
 
 // returnToBoard exits the zoomed chat view without touching the SSE stream or
@@ -757,20 +727,30 @@ func (m Model) updateChat(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch key.String() {
-	case "up", "k", "left", "h":
-		m.moveTranscriptCursor(-1)
-	case "down", "j", "right", "l":
-		m.moveTranscriptCursor(1)
+	case "shift+up":
+		m.selectFeedItem(-1)
+	case "shift+down":
+		m.selectFeedItem(1)
+	case "space", "enter":
+		m.toggleFeedItem()
+	case "up", "k":
+		m.chat.ScrollUp(1)
+		m.follow = false
+	case "down", "j":
+		m.chat.ScrollDown(1)
+		m.follow = m.chat.AtBottom()
 	case "pgup", "ctrl+u":
-		m.moveTranscriptCursor(-5)
+		m.chat.HalfPageUp()
+		m.follow = false
 	case "pgdown", "ctrl+d":
-		m.moveTranscriptCursor(5)
+		m.chat.HalfPageDown()
+		m.follow = m.chat.AtBottom()
 	case "home", "g":
-		m.transcriptCursor = 0
+		m.chat.GotoTop()
+		m.follow = false
 	case "end", "G":
-		if items := m.transcriptItems(); len(items) > 0 {
-			m.transcriptCursor = len(items) - 1
-		}
+		m.chat.GotoBottom()
+		m.follow = true
 	}
 	return m, nil
 }
@@ -1347,9 +1327,6 @@ func (m *Model) applyStream(update mango.StreamUpdate) bool {
 		}
 	}
 	if update.ThreadID == m.currentThreadID() {
-		if m.follow && m.screen == screenChat {
-			m.transcriptCursor = m.lastTranscriptIndex()
-		}
 		m.renderChat()
 	}
 	return rosterChanged
