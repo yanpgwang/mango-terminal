@@ -6,13 +6,15 @@ import (
 )
 
 type Session struct {
-	ID        string    `json:"id"`
-	Title     string    `json:"title"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"created_at"`
-	Agent     Agent     `json:"agent"`
-	Stats     Stats     `json:"stats"`
-	Usage     Usage     `json:"usage"`
+	ID            string    `json:"id"`
+	Title         string    `json:"title"`
+	Status        string    `json:"status"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	EnvironmentID string    `json:"environment_id"`
+	Agent         Agent     `json:"agent"`
+	Stats         Stats     `json:"stats"`
+	Usage         Usage     `json:"usage"`
 }
 
 type Agent struct {

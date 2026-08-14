@@ -30,7 +30,8 @@ type Backend struct {
 func New() *Backend {
 	now := time.Now().Add(-9 * time.Minute).UTC()
 	session := mango.Session{
-		ID: "sesn_demo_product_launch", Title: "Ship the managed Agent launch", Status: "idle", CreatedAt: now,
+		ID: "sesn_demo_product_launch", Title: "Ship the managed Agent launch", Status: "idle",
+		CreatedAt: now, UpdatedAt: time.Now().UTC().Add(-4 * time.Minute), EnvironmentID: "env_demo_cloud",
 	}
 	session.Agent.ID = "agent_demo_coordinator"
 	session.Agent.Name = "coordinator"
@@ -96,6 +97,7 @@ func (b *Backend) ListSessions(context.Context) ([]mango.Session, error) {
 	second := b.session
 	second.ID, second.Title, second.Status = "sesn_demo_incident_review", "Investigate checkout latency", "running"
 	second.CreatedAt = second.CreatedAt.Add(-2 * time.Hour)
+	second.UpdatedAt = time.Now().UTC().Add(-25 * time.Second)
 	sessions := []mango.Session{b.session, second}
 	for _, session := range b.created {
 		sessions = append(sessions, session)
@@ -173,7 +175,9 @@ func (b *Backend) CreateSession(_ context.Context, input mango.CreateSessionInpu
 	b.nextID++
 	sessionID := fmt.Sprintf("sesn_demo_%d", b.nextID)
 	session := mango.Session{
-		ID: sessionID, Title: input.Title, Status: "idle", CreatedAt: time.Now().UTC(), Agent: selected,
+		ID: sessionID, Title: input.Title, Status: "idle",
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		EnvironmentID: input.EnvironmentID, Agent: selected,
 	}
 	if session.Title == "" {
 		session.Title = "New Session"

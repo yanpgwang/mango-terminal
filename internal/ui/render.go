@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
@@ -118,7 +119,10 @@ func (m Model) viewCursor() *tea.Cursor {
 			lipgloss.NewStyle().Width(mainWidth).Height(m.chat.Height()).Padding(0, 1).Render(m.chat.View()),
 			m.renderConversationInfo(mainWidth),
 		)
-		yOffset = lipgloss.Height(strings.Join(above, "\n")) + 1
+		// Composer sits on the line right after `above`. strings.Join already
+		// puts a newline between them, so the composer's first row is exactly
+		// `Height(above)` (0-indexed) — no additional +1 offset is needed.
+		yOffset = lipgloss.Height(strings.Join(above, "\n"))
 	}
 	if source == nil {
 		return nil
@@ -351,27 +355,12 @@ func (m Model) renderSidebar(width, height int) string {
 			stateText(m.theme, m.session.Status),
 			m.theme.dim.Render(shortID(m.session.ID)),
 			"",
-			m.theme.title.Render("Agents"),
+			m.theme.title.Render(fmt.Sprintf("Agents · %d", len(m.threads))),
 		)
 	}
+	inner := max(4, width-6)
 	for index, thread := range m.threads {
-		marker := "  "
-		nameStyle := lipgloss.NewStyle().Foreground(m.theme.text)
-		if index == m.threadCursor {
-			marker, nameStyle = "› ", m.theme.active
-		}
-		unread := ""
-		if count := m.unread[thread.ID]; count > 0 {
-			unread = m.theme.warning.Render(fmt.Sprintf(" +%d", count))
-		}
-		role := "specialist"
-		if thread.Primary() {
-			role = "coordinator"
-		}
-		lines = append(lines,
-			marker+nameStyle.Render(truncate(first(thread.Agent.Name, "Agent"), width-6))+unread,
-			"    "+m.theme.dim.Render(role+" · ")+stateText(m.theme, thread.Status),
-		)
+		lines = append(lines, m.renderSidebarAgent(thread, index == m.threadCursor, inner)...)
 	}
 	if len(m.pending) > 0 {
 		lines = append(lines, "", m.theme.warning.Render(fmt.Sprintf("%d action(s) waiting", len(m.pending))), m.theme.dim.Render("ctrl+p to review"))
@@ -380,6 +369,74 @@ func (m Model) renderSidebar(width, height int) string {
 		Width(width-1).Height(height).Padding(1, 2).
 		BorderLeft(true).BorderForeground(m.theme.border).
 		Render(strings.Join(lines, "\n"))
+}
+
+// renderSidebarAgent lays out a single Agent in the topology tree. The
+// coordinator sits at the left margin; specialists indent under it with an
+// arrow so the delegation relationship reads without a legend. Each row also
+// carries an activity pip, so a glance separates a specialist that is running
+// right now from one that has just idled.
+func (m Model) renderSidebarAgent(thread mango.Thread, selected bool, inner int) []string {
+	nameStyle := lipgloss.NewStyle().Foreground(m.theme.text)
+	marker := "  "
+	if selected {
+		marker, nameStyle = "› ", m.theme.active
+	}
+	branch := ""
+	detailIndent := "    "
+	if !thread.Primary() {
+		branch = m.theme.dim.Render("↳ ")
+		detailIndent = "      "
+	}
+	pip := sessionStatePip(m.theme, thread.Status)
+	unread := ""
+	if count := m.unread[thread.ID]; count > 0 {
+		unread = m.theme.warning.Render(fmt.Sprintf(" +%d", count))
+	}
+	prefixWidth := ansi.StringWidth(marker) + ansi.StringWidth(ansi.Strip(branch)) +
+		ansi.StringWidth(ansi.Strip(pip)) + 1 + ansi.StringWidth(ansi.Strip(unread))
+	name := truncate(first(thread.Agent.Name, "Agent"), max(4, inner-prefixWidth))
+	head := marker + branch + pip + " " + nameStyle.Render(name) + unread
+
+	detail := m.sidebarAgentDetail(thread, inner-ansi.StringWidth(detailIndent))
+	return []string{head, detailIndent + m.theme.dim.Render(detail)}
+}
+
+// sidebarAgentDetail is one line of context under an Agent name. For a
+// specialist we prefer showing the first task the coordinator delegated,
+// because "why is this Agent here" is more informative than "specialist ·
+// idle". For the coordinator we fall back to role + state so the top of the
+// tree is never blank.
+func (m Model) sidebarAgentDetail(thread mango.Thread, width int) string {
+	role := "specialist"
+	if thread.Primary() {
+		role = "coordinator"
+	}
+	if !thread.Primary() {
+		if task := m.delegationPreview(thread.ID); task != "" {
+			return trimOneLine(task, max(4, width))
+		}
+	}
+	return trimOneLine(role+" · "+ansi.Strip(stateText(m.theme, thread.Status)), max(4, width))
+}
+
+// delegationPreview returns the first task that landed on this Thread, or the
+// empty string if the child has not been briefed yet. It is intentionally the
+// earliest inbound message because Managed coordinators delegate once at the
+// start of a Thread and only chase up with clarifications.
+func (m Model) delegationPreview(threadID string) string {
+	for _, event := range m.events[threadID] {
+		if event.Type() != "agent.thread_message_received" {
+			continue
+		}
+		if text := strings.TrimSpace(feed.ContentText(event["content"])); text != "" {
+			if newline := strings.IndexByte(text, '\n'); newline >= 0 {
+				text = text[:newline]
+			}
+			return text
+		}
+	}
+	return ""
 }
 
 func (m *Model) renderChat() {
@@ -508,8 +565,9 @@ func (m Model) renderInboxMain(width, height int) string {
 		gradientText(lipgloss.NewStyle(), "Cloud sessions", true, m.theme.accent, m.theme.blue) + "\n" +
 		m.theme.dim.Render(truncate(endpoint, contentWidth))
 	rows := make([]string, 0, len(m.sessions)+3)
-	visible := max(1, height-lipgloss.Height(header)-7)
+	visible := max(1, height-lipgloss.Height(header)-8)
 	start, end := visibleRange(len(m.sessions)+3, m.inboxCursor, visible)
+	now := time.Now()
 	for index := start; index < end; index++ {
 		marker, titleStyle := "  ", lipgloss.NewStyle().Foreground(m.theme.text)
 		if index == m.inboxCursor {
@@ -530,25 +588,85 @@ func (m Model) renderInboxMain(width, height int) string {
 				"    "+m.theme.dim.Render("Fetch the latest Session states"))
 			continue
 		}
-		session := m.sessions[index-3]
-		nameWidth := max(12, contentWidth-24)
-		name := truncate(first(session.Title, session.Agent.Name, session.ID), nameWidth)
-		meta := first(session.Agent.Name, "Agent") + "  " + shortID(session.ID)
-		rows = append(rows,
-			marker+titleStyle.Render(name)+"  "+stateText(m.theme, session.Status)+"\n"+
-				"    "+m.theme.dim.Render(trimOneLine(meta, contentWidth-4)))
+		rows = append(rows, m.renderInboxSessionRow(m.sessions[index-3], contentWidth, marker, titleStyle, now))
 	}
-	status := ""
-	if m.loading {
-		status = m.activity(first(m.loadingLabel, "Refreshing Sessions"))
-	} else if m.err != nil {
-		status = m.theme.danger.Render(trimOneLine(m.err.Error(), contentWidth))
-	} else {
-		status = m.theme.success.Render("CONNECTED") + m.theme.dim.Render(fmt.Sprintf("  %d Sessions", len(m.sessions)))
-	}
+	status := m.renderInboxStatus(contentWidth)
 	content := strings.Join([]string{header, "", status, "", strings.Join(rows, "\n\n")}, "\n")
 	return lipgloss.NewStyle().Width(width).Height(max(5, height)).Padding(1, 3).
 		Render(lipgloss.NewStyle().Width(contentWidth).Render(content))
+}
+
+// renderInboxStatus is the fleet-scoped line under the endpoint. It replaces
+// the older "CONNECTED · N Sessions" text with a running/idle/needs-action
+// count plus a permanent reminder that managed work outlives this window.
+func (m Model) renderInboxStatus(contentWidth int) string {
+	if m.loading {
+		return m.activity(first(m.loadingLabel, "Refreshing Sessions"))
+	}
+	if m.err != nil {
+		return m.theme.danger.Render(trimOneLine(m.err.Error(), contentWidth))
+	}
+	counts := summarizeFleet(m.sessions)
+	parts := []string{m.theme.success.Render("CONNECTED")}
+	if counts.needsAction > 0 {
+		parts = append(parts, m.theme.warning.Render(fmt.Sprintf("%d needs input", counts.needsAction)))
+	}
+	if counts.running > 0 {
+		parts = append(parts, m.theme.active.Render(fmt.Sprintf("%d running", counts.running)))
+	}
+	if counts.idle > 0 {
+		parts = append(parts, m.theme.dim.Render(fmt.Sprintf("%d idle", counts.idle)))
+	}
+	if counts.other > 0 {
+		parts = append(parts, m.theme.dim.Render(fmt.Sprintf("%d other", counts.other)))
+	}
+	summary := strings.Join(parts, m.theme.dim.Render("  ·  "))
+	tagline := m.theme.dim.Render(truncate("Sessions keep running in the cloud after you detach.", contentWidth))
+	return summary + "\n" + tagline
+}
+
+// renderInboxSessionRow renders one durable Session as a two-line entry. The
+// first line carries the state pip, title, and a small marker if this is the
+// Session the user just detached from. The second line packs Agent identity,
+// subagent-count, and relative activity so a glance separates a live turn from
+// an idle Session.
+func (m Model) renderInboxSessionRow(session mango.Session, contentWidth int, marker string, titleStyle lipgloss.Style, now time.Time) string {
+	pip := sessionStatePip(m.theme, session.Status)
+	returnMark := ""
+	if session.ID != "" && session.ID == m.lastAttachedID {
+		returnMark = "  " + m.theme.active.Render("⤴ recently attached")
+	}
+	nameWidth := max(12, contentWidth-ansi.StringWidth(marker)-ansi.StringWidth(pip)-1-
+		ansi.StringWidth(ansi.Strip(returnMark))-1-ansi.StringWidth(stateText(m.theme, session.Status))-1)
+	name := truncate(first(session.Title, session.Agent.Name, session.ID), nameWidth)
+	head := marker + pip + " " + titleStyle.Render(name) + "  " + stateText(m.theme, session.Status) + returnMark
+
+	metaParts := []string{first(session.Agent.Name, "Agent")}
+	if model := strings.TrimSpace(session.Agent.Model.ID); model != "" {
+		metaParts = append(metaParts, model)
+	}
+	if children := subagentCount(session); children > 0 {
+		metaParts = append(metaParts, fmt.Sprintf("%d sub-agents", children))
+	}
+	if since := humanizeSince(recency(session), now); since != "" {
+		metaParts = append(metaParts, since)
+	}
+	metaParts = append(metaParts, shortID(session.ID))
+	meta := strings.Join(metaParts, " · ")
+	return head + "\n    " + m.theme.dim.Render(trimOneLine(meta, contentWidth-4))
+}
+
+func sessionStatePip(t theme, status string) string {
+	switch status {
+	case "running", "rescheduling":
+		return t.active.Render("●")
+	case "requires_action":
+		return t.warning.Render("!")
+	case "terminated", "failed", "error":
+		return t.danger.Render("○")
+	default:
+		return t.dim.Render("○")
+	}
 }
 
 func (m Model) renderConnect() string {

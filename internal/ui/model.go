@@ -111,9 +111,10 @@ type Model struct {
 	pendingSignature       string
 	pendingDismissed       bool
 
-	sessions    []mango.Session
-	inboxCursor int
-	inboxFilter string
+	sessions       []mango.Session
+	inboxCursor    int
+	inboxFilter    string
+	lastAttachedID string
 
 	session      *mango.Session
 	threads      []mango.Thread
@@ -182,18 +183,6 @@ func NewWithOptions(backend mango.Backend, directAttach string, options Options)
 	editor.SetVirtualCursor(false)
 	editor.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter", "ctrl+j"))
 	editor.SetStyles(t.textareaStyles())
-	editor.SetPromptFunc(4, func(info textarea.PromptInfo) string {
-		if info.LineNumber == 0 {
-			if info.Focused {
-				return t.success.Render("  > ")
-			}
-			return t.dim.Render("::: ")
-		}
-		if info.Focused {
-			return t.success.Render("::: ")
-		}
-		return t.dim.Render("::: ")
-	})
 	editor.Focus()
 	filter := textinput.New()
 	filter.Prompt = "> "
@@ -278,7 +267,8 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case inboxLoaded:
 		m.loading, m.err = false, msg.err
 		if msg.err == nil {
-			m.sessions, m.status, m.screen = msg.sessions, "connected", screenInbox
+			m.sessions = fleetOrder(msg.sessions)
+			m.status, m.screen = "connected", screenInbox
 			m.inboxCursor = clamp(m.inboxCursor, 0, max(0, len(m.sessions)-1))
 		} else {
 			m.screen, m.status = screenConnect, "connection failed"
@@ -918,6 +908,9 @@ func (m Model) returnToInbox() (tea.Model, tea.Cmd) {
 	m.cancelOperation()
 	m.stopStream()
 	m.reconnecting, m.reconnectTry = false, 0
+	if m.session != nil {
+		m.lastAttachedID = m.session.ID
+	}
 	m.screen, m.loading, m.loadingLabel, m.session, m.err = screenInbox, true, "Refreshing Sessions", nil, nil
 	m.editor.Reset()
 	m.editor.Placeholder = landingPlaceholder(screenChat)
