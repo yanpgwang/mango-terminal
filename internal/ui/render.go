@@ -527,9 +527,9 @@ func (m *Model) renderFeedItem(item feed.Item, selected bool, width int) string 
 func (m Model) renderInbox() string {
 	width, height := max(1, m.width), max(1, m.height)
 	main := m.renderInboxMain(width, height-2)
-	helpText := "↑↓ choose  enter select  n new  / find  r refresh  esc disconnect  ? help  ctrl+c quit"
-	if width < 80 {
-		helpText = "↑↓ choose  enter select  n new  / find  esc disconnect"
+	helpText := "←→ pill  ↑↓ list  enter select  n new  / find  r refresh  esc disconnect  ? help  ctrl+c quit"
+	if width < 90 {
+		helpText = "←→ pill  ↑↓ list  enter select  n new  / find  esc"
 	}
 	help := lipgloss.NewStyle().Width(width).Padding(0, 2).Render(m.theme.dim.Render(helpText))
 	return lipgloss.NewStyle().Width(width).Height(height).Render(main + "\n" + help)

@@ -487,13 +487,39 @@ func (m Model) updateConnect(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateInbox(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	choiceCount := len(m.sessions) + 3 // create, search, refresh, then durable Sessions
 	switch key.String() {
+	case "left", "h":
+		if m.inboxCursor < 3 {
+			m.inboxCursor = wrap(m.inboxCursor-1, 3)
+		}
+		return m, nil
+	case "right", "l":
+		if m.inboxCursor < 3 {
+			m.inboxCursor = wrap(m.inboxCursor+1, 3)
+		}
+		return m, nil
 	case "up", "k":
-		m.inboxCursor = wrap(m.inboxCursor-1, choiceCount)
+		if m.inboxCursor >= 3 {
+			if m.inboxCursor == 3 {
+				// Leaving the top of the Session list snaps back onto the
+				// toolbar. Landing on the first pill keeps the "left is where
+				// I started" mental model consistent across sessions.
+				m.inboxCursor = 0
+			} else {
+				m.inboxCursor--
+			}
+		}
 		return m, nil
 	case "down", "j":
-		m.inboxCursor = wrap(m.inboxCursor+1, choiceCount)
+		if m.inboxCursor < 3 {
+			if len(m.sessions) > 0 {
+				m.inboxCursor = 3
+			}
+			return m, nil
+		}
+		if m.inboxCursor-3 < len(m.sessions)-1 {
+			m.inboxCursor++
+		}
 		return m, nil
 	case "ctrl+s":
 		m.openSessions()
