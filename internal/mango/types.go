@@ -36,6 +36,9 @@ type AgentReference struct {
 	Type    string `json:"type"`
 	ID      string `json:"id"`
 	Version int    `json:"version"`
+	// Name is populated when the reference appears inside a resolved Session
+	// multi-agent roster; the leaner Agent-resource reference form omits it.
+	Name string `json:"name"`
 }
 
 type Multiagent struct {

@@ -69,18 +69,23 @@ func TestTabNeverChangesSelectedAgent(t *testing.T) {
 	}
 }
 
-func TestWideLayoutHasCloudSessionSidebar(t *testing.T) {
+func TestAttachedSessionShowsBoardWithAgents(t *testing.T) {
 	model := New(demo.New(), "")
 	model.loading = false
-	model.width, model.height, model.screen = 140, 42, screenChat
+	model.width, model.height, model.screen = 140, 42, screenBoard
 	model.session = &mango.Session{ID: "sesn_1", Title: "Launch"}
-	model.threads = []mango.Thread{{ID: "sthr_primary", Status: "idle"}}
-	model.threads[0].Agent.Name = "coordinator"
+	parent := "sthr_primary"
+	model.threads = []mango.Thread{
+		{ID: parent, Status: "idle", Agent: mango.Agent{Name: "coordinator"}},
+		{ID: "sthr_child", ParentThreadID: &parent, Status: "idle", Agent: mango.Agent{Name: "researcher"}},
+	}
+	model.threadCursor = 0
 	model.resize()
-	model.renderChat()
-	view := ansi.Strip(model.renderWorkspace())
-	if !strings.Contains(view, "MANGO") || !strings.Contains(view, "Agents") || strings.Contains(view, "Working 0") {
-		t.Fatalf("view = %q", view)
+	view := ansi.Strip(model.renderBoard())
+	for _, want := range []string{"Launch", "Coordinator", "Sub-agents", "researcher"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("board missing %q: %q", want, view)
+		}
 	}
 }
 
@@ -372,10 +377,6 @@ func TestConversationFooterOwnsModelAndLiveUsage(t *testing.T) {
 	if !strings.Contains(footer, "deepseek-v4-flash") || !strings.Contains(footer, "1.2K in") || !strings.Contains(footer, "345 out") {
 		t.Fatalf("conversation footer = %q", footer)
 	}
-	sidebar := ansi.Strip(model.renderSidebar(sidebarWidth, model.height))
-	if strings.Contains(sidebar, "Model") || strings.Contains(sidebar, "Usage") || strings.Contains(sidebar, "deepseek-v4-flash") {
-		t.Fatalf("sidebar still owns runtime metadata = %q", sidebar)
-	}
 	if model.session.Usage.InputTokens != 1200 || model.threads[0].Usage.CacheReadInputTokens != 90 {
 		t.Fatalf("usage session=%#v thread=%#v", model.session.Usage, model.threads[0].Usage)
 	}
@@ -473,7 +474,7 @@ func TestNewSessionWizardCreatesAndAttaches(t *testing.T) {
 	}
 	updated, _ = model.Update(attach())
 	model = updated.(Model)
-	if model.screen != screenChat || model.session == nil || model.session.Title != "Created in TUI" {
+	if model.screen != screenBoard || model.session == nil || model.session.Title != "Created in TUI" {
 		t.Fatalf("screen=%v session=%#v err=%v", model.screen, model.session, model.err)
 	}
 	if got := model.events[model.primaryThreadID()]; len(got) != 1 || got[0].Type() != "user.message" {
@@ -668,7 +669,7 @@ func TestFailedSendPreservesDraftAndReadyPlaceholder(t *testing.T) {
 	}
 	updated, _ = model.Update(command())
 	model = updated.(Model)
-	if model.editor.Value() != "do not lose this" || model.editor.Placeholder != "Ready!" || model.err == nil {
+	if model.editor.Value() != "do not lose this" || model.editor.Placeholder != "Message coordinator…" || model.err == nil {
 		t.Fatalf("draft=%q placeholder=%q err=%v", model.editor.Value(), model.editor.Placeholder, model.err)
 	}
 }

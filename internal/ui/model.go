@@ -26,13 +26,14 @@ type dialog int
 const (
 	screenConnect screen = iota
 	screenInbox
+	screenBoard
 	screenChat
 )
 
 const (
 	focusEditor focus = iota
 	focusChat
-	focusSidebar
+	focusBoard
 )
 
 const (
@@ -115,6 +116,7 @@ type Model struct {
 	inboxCursor    int
 	inboxFilter    string
 	lastAttachedID string
+	boardCursor    int
 
 	session      *mango.Session
 	threads      []mango.Thread
@@ -315,8 +317,9 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.rebuildSeen()
 		m.stream, m.streamCancel = msg.attachment.Updates, msg.attachment.Cancel
 		m.refreshPending()
-		m.screen, m.focus, m.status, m.dialog = screenChat, focusEditor, "attached", dialogNone
-		m.editor.Placeholder = "Ready!"
+		m.screen, m.focus, m.status, m.dialog = screenBoard, focusEditor, "attached", dialogNone
+		m.boardCursor = 0
+		m.editor.Placeholder = "Message coordinator…"
 		m.follow = true
 		if len(m.pending) > 0 {
 			m.openActionDialog(true)
@@ -370,7 +373,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading, m.err = false, msg.err
 		m.loadingLabel = ""
 		m.cancelOperation()
-		m.editor.Placeholder = "Ready!"
+		m.editor.Placeholder = "Message coordinator…"
 		if msg.err != nil {
 			if current := m.previews[m.currentThreadID()]; current != nil && current.messageID == "" {
 				delete(m.previews, m.currentThreadID())
@@ -440,25 +443,16 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screen == screenInbox {
 			return m.updateInbox(msg)
 		}
+		if m.screen == screenBoard {
+			return m.updateBoard(msg)
+		}
 		return m.updateChat(msg)
 	case tea.MouseWheelMsg:
 		if m.screen != screenChat || m.dialog != dialogNone {
 			return m, nil
 		}
 		mouse := msg.Mouse()
-		mainWidth := m.width
-		if !m.compact {
-			mainWidth -= sidebarWidth
-		}
-		if !m.compact && mouse.X >= mainWidth && mouse.X < m.width {
-			if mouse.Button == tea.MouseWheelUp {
-				m.selectThread(-1)
-			} else if mouse.Button == tea.MouseWheelDown {
-				m.selectThread(1)
-			}
-			return m, nil
-		}
-		if mouse.X < 0 || mouse.X >= mainWidth || mouse.Y < 0 || mouse.Y >= m.chat.Height() {
+		if mouse.X < 0 || mouse.X >= m.width || mouse.Y < 0 || mouse.Y >= m.chat.Height() {
 			return m, nil
 		}
 		var command tea.Cmd
@@ -512,6 +506,12 @@ func (m Model) updateInbox(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+n", "n":
 		return m.startNewSession()
+	case "r":
+		if m.loading {
+			return m, nil
+		}
+		m.loading, m.loadingLabel, m.err = true, "Refreshing Sessions", nil
+		return m, m.loadInbox()
 	case "enter":
 		if m.loading {
 			return m, nil
@@ -543,6 +543,114 @@ func (m Model) updateInbox(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) updateBoard(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "ctrl+n":
+		return m.startNewSession()
+	case "ctrl+s":
+		m.openSessions()
+		return m, nil
+	case "ctrl+p":
+		m.openCommands()
+		return m, nil
+	case "ctrl+g":
+		m.dialog, m.dialogCursor, m.dialogQuery = dialogAgents, max(0, m.threadCursor), ""
+		m.beginFilter("Filter Agents", "")
+		return m, nil
+	case "ctrl+x":
+		m.dialog, m.dialogCursor = dialogInterrupt, 0
+		return m, nil
+	case "tab", "shift+tab":
+		if m.focus == focusEditor {
+			m.setFocus(focusBoard)
+		} else {
+			m.setFocus(focusEditor)
+		}
+		return m, nil
+	case "esc":
+		return m.returnToInbox()
+	}
+
+	if m.focus == focusEditor {
+		if key.String() == "enter" && !m.loading && strings.TrimSpace(m.editor.Value()) != "" {
+			text := strings.TrimSpace(m.editor.Value())
+			m.editor.Reset()
+			m.loading, m.loadingLabel, m.status = true, "Sending message", "sending"
+			m.editor.Placeholder = "Working…"
+			m.follow = true
+			m.beginLiveTurn(m.currentThreadID())
+			ctx, operationID := m.beginOperation()
+			return m, m.sendMessage(ctx, operationID, text)
+		}
+		if key.String() == "/" && strings.TrimSpace(m.editor.Value()) == "" {
+			m.openCommands()
+			return m, nil
+		}
+		var command tea.Cmd
+		m.editor, command = m.editor.Update(key)
+		m.resize()
+		return m, command
+	}
+
+	// focusBoard: cards navigation
+	count := m.boardCardCount()
+	if count == 0 {
+		return m, nil
+	}
+	switch key.String() {
+	case "up", "k":
+		m.boardCursor = wrap(m.boardCursor-1, count)
+	case "down", "j":
+		m.boardCursor = wrap(m.boardCursor+1, count)
+	case "enter", "z", "space":
+		return m.zoomFromBoard()
+	}
+	return m, nil
+}
+
+// boardCardCount reports how many navigable cards the Board renders. Agents
+// come first (coordinator, then specialists in roster order), then the
+// pending-action cards.
+func (m Model) boardCardCount() int {
+	return len(m.threads) + len(m.pending)
+}
+
+// zoomFromBoard promotes whatever card the operator selected: an Agent card
+// zooms into that Thread's chat view; a pending-action card opens the same
+// decision dialog the async barrier would.
+func (m Model) zoomFromBoard() (tea.Model, tea.Cmd) {
+	if m.boardCursor < len(m.threads) {
+		m.threadCursor = m.boardCursor
+		m.unread[m.currentThreadID()] = 0
+		m.itemCursor = -1
+		m.follow = true
+		m.screen = screenChat
+		m.setFocus(focusEditor)
+		m.resize()
+		m.renderChat()
+		return m, nil
+	}
+	pendingIndex := m.boardCursor - len(m.threads)
+	if pendingIndex < 0 || pendingIndex >= len(m.pending) {
+		return m, nil
+	}
+	m.actionCursor = pendingIndex
+	m.pendingDismissed = false
+	m.openActionDialog(false)
+	return m, nil
+}
+
+// returnToBoard exits the zoomed chat view without touching the SSE stream or
+// the coordinator's Session state. It is the natural "back" for the two-level
+// Session navigation (Board ↔ Chat) and never triggers a re-attach.
+func (m Model) returnToBoard() (tea.Model, tea.Cmd) {
+	m.screen = screenBoard
+	m.setFocus(focusEditor)
+	m.editor.Focus()
+	m.resize()
+	return m, nil
+}
+
 func (m Model) updateChat(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "ctrl+n":
@@ -568,7 +676,7 @@ func (m Model) updateChat(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "esc":
-		return m.returnToInbox()
+		return m.returnToBoard()
 	}
 
 	if m.focus == focusEditor {
@@ -1539,7 +1647,7 @@ func landingPlaceholder(current screen) string {
 	if current == screenInbox {
 		return "Ask a managed Agent anything…"
 	}
-	return "Ready!"
+	return "Message coordinator…"
 }
 func wrap(value, length int) int {
 	if length <= 0 {

@@ -14,7 +14,6 @@ import (
 )
 
 const (
-	sidebarWidth      = 32
 	minTerminalWidth  = 60
 	minTerminalHeight = 20
 )
@@ -52,6 +51,8 @@ func (m Model) View() tea.View {
 	switch m.screen {
 	case screenInbox:
 		content = m.renderInbox()
+	case screenBoard:
+		content = m.renderBoard()
 	case screenChat:
 		content = m.renderWorkspace()
 	}
@@ -103,22 +104,14 @@ func (m Model) viewCursor() *tea.Cursor {
 		xOffset += max(0, (m.width-lipgloss.Width(modal))/2)
 		yOffset += max(0, (m.height-lipgloss.Height(modal))/2)
 	} else {
-		if m.focus != focusEditor || m.screen != screenChat {
+		if m.focus != focusEditor {
+			return nil
+		}
+		if m.screen != screenChat && m.screen != screenBoard {
 			return nil
 		}
 		source = m.editor.Cursor()
-		mainWidth := m.width
-		if !m.compact {
-			mainWidth -= sidebarWidth
-		}
-		above := make([]string, 0, 2)
-		if m.compact {
-			above = append(above, m.compactHeader(mainWidth))
-		}
-		above = append(above,
-			lipgloss.NewStyle().Width(mainWidth).Height(m.chat.Height()).Padding(0, 1).Render(m.chat.View()),
-			m.renderConversationInfo(mainWidth),
-		)
+		above := m.linesAboveComposer(m.width)
 		// Composer sits on the line right after `above`. strings.Join already
 		// puts a newline between them, so the composer's first row is exactly
 		// `Height(above)` (0-indexed) — no additional +1 offset is needed.
@@ -173,11 +166,7 @@ func (m *Model) resize() {
 		return
 	}
 	m.compact = m.width < 120 || m.height < 30
-	mainWidth := m.width
-	if m.screen == screenChat && !m.compact {
-		mainWidth -= sidebarWidth
-	}
-	innerWidth := max(20, mainWidth-2)
+	innerWidth := max(20, m.width-2)
 	m.editor.MaxHeight = 15
 	if m.dialogUsesEditor() {
 		innerWidth = max(12, dialogInnerWidth(m.dialogWidth())-4)
@@ -186,13 +175,18 @@ func (m *Model) resize() {
 	m.editor.SetWidth(innerWidth)
 	m.filter.SetWidth(max(12, dialogInnerWidth(m.dialogWidth())-3))
 	composerHeight := m.composerHeight()
-	extraHeight := 5 // conversation info, help row, and the joins around the composer
-	if m.compact {
-		extraHeight += 3 // two-line header plus its join
-	}
-	chatHeight := max(3, m.height-composerHeight-extraHeight)
+	// Chat viewport: header (2) + convInfo (1) + help (1) + a bit of slack.
+	chatHeight := max(3, m.height-composerHeight-6)
 	m.chat.SetWidth(innerWidth)
 	m.chat.SetHeight(chatHeight)
+}
+
+// boardBodyHeight is the vertical space between the Board header and the
+// composer. Both View() and viewCursor() see the same number so the caret
+// never drifts off the composer's real position.
+func (m Model) boardBodyHeight() int {
+	// Board: header (2) + body + composer + help (1) + a bit of slack.
+	return max(3, m.height-m.composerHeight()-6)
 }
 
 func (m Model) composerHeight() int {
@@ -234,45 +228,54 @@ func (m Model) dialogUsesFilter() bool {
 
 func (m Model) renderWorkspace() string {
 	width, height := max(1, m.width), max(1, m.height)
-	mainWidth := width
-	if !m.compact {
-		mainWidth -= sidebarWidth
-	}
-	parts := make([]string, 0, 4)
-	if m.compact {
-		parts = append(parts, m.compactHeader(mainWidth))
-	}
+	parts := append([]string(nil), m.linesAboveComposer(width)...)
 	parts = append(parts,
-		lipgloss.NewStyle().Width(mainWidth).Height(m.chat.Height()).Padding(0, 1).Render(m.chat.View()),
-		m.renderConversationInfo(mainWidth),
-		m.renderComposer(mainWidth),
-		m.renderHelp(mainWidth),
+		m.renderComposer(width),
+		m.renderHelp(width),
 	)
-	main := lipgloss.NewStyle().Width(mainWidth).Height(height).Render(strings.Join(parts, "\n"))
-	if m.compact {
-		return main
-	}
-	sidebar := m.renderSidebar(sidebarWidth, height)
-	return lipgloss.JoinHorizontal(lipgloss.Top, main, sidebar)
+	return lipgloss.NewStyle().Width(width).Height(height).Render(strings.Join(parts, "\n"))
 }
 
-func (m Model) compactHeader(width int) string {
+// linesAboveComposer returns the ordered slice of rendered rows that sit above
+// the composer for the current screen. Both View() and viewCursor() consume it
+// so a change in one place cannot desync the caret from the layout below.
+func (m Model) linesAboveComposer(width int) []string {
+	if m.screen == screenBoard {
+		return []string{
+			m.renderBoardHeader(width),
+			m.renderBoardBody(width, m.boardBodyHeight()),
+		}
+	}
+	return []string{
+		m.renderChatHeader(width),
+		lipgloss.NewStyle().Width(width).Height(m.chat.Height()).Padding(0, 1).Render(m.chat.View()),
+		m.renderConversationInfo(width),
+	}
+}
+
+// renderChatHeader labels the zoomed Thread and shows the way back to the
+// Board. It replaces the older compact-mode-only header so the operator can
+// always see which specialist they are looking at, not just which coordinator.
+func (m Model) renderChatHeader(width int) string {
 	name := "Agent"
 	status := ""
+	role := ""
 	if m.threadCursor >= 0 && m.threadCursor < len(m.threads) {
-		name = first(m.threads[m.threadCursor].Agent.Name, name)
-		status = stateText(m.theme, m.threads[m.threadCursor].Status)
+		thread := m.threads[m.threadCursor]
+		name = first(thread.Agent.Name, name)
+		status = stateText(m.theme, thread.Status)
+		if thread.Primary() {
+			role = "coordinator"
+		} else {
+			role = "sub-agent"
+		}
 	}
-	rightLabel := "ctrl+p commands"
-	if width < 80 {
-		rightLabel = "ctrl+p"
-	}
-	right := m.theme.dim.Render(rightLabel)
-	prefixWidth := ansi.StringWidth("mango    ") + ansi.StringWidth(status)
-	name = truncate(name, max(6, width-4-prefixWidth-ansi.StringWidth(right)-1))
-	left := m.theme.active.Render("mango") + "  " + m.theme.title.Render(name) + " " + status
-	return lipgloss.NewStyle().Width(width).Padding(0, 2).Render(joinSides(left, right, width-4)) +
-		"\n" + m.theme.dim.Render(strings.Repeat("─", width))
+	back := m.theme.dim.Render("‹ Board") + "  " + m.theme.dim.Render("esc")
+	prefixWidth := ansi.StringWidth(ansi.Strip(back)) + 4 + ansi.StringWidth(ansi.Strip(status)) + 3 + ansi.StringWidth(role)
+	name = truncate(name, max(4, width-4-prefixWidth))
+	middle := m.theme.title.Render(name) + "  " + m.theme.dim.Render(role) + "  " + status
+	line := lipgloss.NewStyle().Width(width).Padding(0, 2).Render(joinSides(back, middle, width-4))
+	return line + "\n" + m.theme.dim.Render(strings.Repeat("─", width))
 }
 
 func (m Model) renderComposer(width int) string {
@@ -315,20 +318,32 @@ func (m Model) renderHelp(width int) string {
 	var text string
 	switch m.focus {
 	case focusEditor:
-		text = "enter send  shift+enter newline  tab chat  ctrl+p commands  ctrl+n new"
-		if width < 70 {
-			text = "enter send  tab chat  ctrl+p commands"
+		if m.screen == screenBoard {
+			text = "enter send  shift+enter newline  tab board  ctrl+n new  ctrl+p commands  esc back"
+			if width < 80 {
+				text = "enter send  tab board  ctrl+p commands  esc back"
+			}
+		} else {
+			text = "enter send  shift+enter newline  tab chat  ctrl+p commands  esc board"
+			if width < 80 {
+				text = "enter send  tab chat  ctrl+p commands  esc board"
+			}
+			if width >= 110 {
+				text += "  ctrl+g agents"
+			}
 		}
-		if width >= 100 {
-			text += "  ctrl+g agents"
+	case focusBoard:
+		text = "↑↓ pick  enter zoom  z zoom  tab compose  esc Sessions"
+		if width < 80 {
+			text = "↑↓ pick  enter zoom  tab compose  esc"
 		}
 	case focusChat:
-		text = "↑↓ scroll  enter expand  tab editor  esc Sessions"
-		if width < 70 {
+		text = "↑↓ scroll  enter expand  tab editor  esc board"
+		if width < 80 {
 			text = "↑↓ scroll  enter inspect  tab editor"
 		}
-		if width >= 100 {
-			text = "↑↓ scroll  shift+↑↓ select  enter inspect  tab editor  esc Sessions"
+		if width >= 110 {
+			text = "↑↓ scroll  shift+↑↓ select  enter inspect  tab editor  esc board"
 		}
 	}
 	if m.err != nil {
@@ -340,84 +355,6 @@ func (m Model) renderHelp(width int) string {
 		return lipgloss.NewStyle().Width(width).Padding(0, 2).Render(m.activity(label))
 	}
 	return lipgloss.NewStyle().Width(width).Padding(0, 2).Render(m.theme.dim.Render(text))
-}
-
-func (m Model) renderSidebar(width, height int) string {
-	lines := []string{
-		m.theme.dim.Render("‹ Sessions") + "  " + m.theme.dim.Render("ctrl+s"),
-		"",
-		m.brandLogo(true),
-		"",
-	}
-	if m.session != nil {
-		lines = append(lines,
-			m.theme.title.Render(first(m.session.Title, "Untitled Session")),
-			stateText(m.theme, m.session.Status),
-			m.theme.dim.Render(shortID(m.session.ID)),
-			"",
-			m.theme.title.Render(fmt.Sprintf("Agents · %d", len(m.threads))),
-		)
-	}
-	inner := max(4, width-6)
-	for index, thread := range m.threads {
-		lines = append(lines, m.renderSidebarAgent(thread, index == m.threadCursor, inner)...)
-	}
-	if len(m.pending) > 0 {
-		lines = append(lines, "", m.theme.warning.Render(fmt.Sprintf("%d action(s) waiting", len(m.pending))), m.theme.dim.Render("ctrl+p to review"))
-	}
-	return lipgloss.NewStyle().
-		Width(width-1).Height(height).Padding(1, 2).
-		BorderLeft(true).BorderForeground(m.theme.border).
-		Render(strings.Join(lines, "\n"))
-}
-
-// renderSidebarAgent lays out a single Agent in the topology tree. The
-// coordinator sits at the left margin; specialists indent under it with an
-// arrow so the delegation relationship reads without a legend. Each row also
-// carries an activity pip, so a glance separates a specialist that is running
-// right now from one that has just idled.
-func (m Model) renderSidebarAgent(thread mango.Thread, selected bool, inner int) []string {
-	nameStyle := lipgloss.NewStyle().Foreground(m.theme.text)
-	marker := "  "
-	if selected {
-		marker, nameStyle = "› ", m.theme.active
-	}
-	branch := ""
-	detailIndent := "    "
-	if !thread.Primary() {
-		branch = m.theme.dim.Render("↳ ")
-		detailIndent = "      "
-	}
-	pip := sessionStatePip(m.theme, thread.Status)
-	unread := ""
-	if count := m.unread[thread.ID]; count > 0 {
-		unread = m.theme.warning.Render(fmt.Sprintf(" +%d", count))
-	}
-	prefixWidth := ansi.StringWidth(marker) + ansi.StringWidth(ansi.Strip(branch)) +
-		ansi.StringWidth(ansi.Strip(pip)) + 1 + ansi.StringWidth(ansi.Strip(unread))
-	name := truncate(first(thread.Agent.Name, "Agent"), max(4, inner-prefixWidth))
-	head := marker + branch + pip + " " + nameStyle.Render(name) + unread
-
-	detail := m.sidebarAgentDetail(thread, inner-ansi.StringWidth(detailIndent))
-	return []string{head, detailIndent + m.theme.dim.Render(detail)}
-}
-
-// sidebarAgentDetail is one line of context under an Agent name. For a
-// specialist we prefer showing the first task the coordinator delegated,
-// because "why is this Agent here" is more informative than "specialist ·
-// idle". For the coordinator we fall back to role + state so the top of the
-// tree is never blank.
-func (m Model) sidebarAgentDetail(thread mango.Thread, width int) string {
-	role := "specialist"
-	if thread.Primary() {
-		role = "coordinator"
-	}
-	if !thread.Primary() {
-		if task := m.delegationPreview(thread.ID); task != "" {
-			return trimOneLine(task, max(4, width))
-		}
-	}
-	return trimOneLine(role+" · "+ansi.Strip(stateText(m.theme, thread.Status)), max(4, width))
 }
 
 // delegationPreview returns the first task that landed on this Thread, or the
@@ -550,50 +487,88 @@ func (m *Model) renderFeedItem(item feed.Item, selected bool, width int) string 
 func (m Model) renderInbox() string {
 	width, height := max(1, m.width), max(1, m.height)
 	main := m.renderInboxMain(width, height-2)
-	helpText := "↑↓ choose  enter select  esc disconnect  ? help  ctrl+c quit"
-	if width < 70 {
-		helpText = "↑↓ choose  enter select  esc disconnect"
+	helpText := "↑↓ choose  enter select  n new  / find  r refresh  esc disconnect  ? help  ctrl+c quit"
+	if width < 80 {
+		helpText = "↑↓ choose  enter select  n new  / find  esc disconnect"
 	}
 	help := lipgloss.NewStyle().Width(width).Padding(0, 2).Render(m.theme.dim.Render(helpText))
 	return lipgloss.NewStyle().Width(width).Height(height).Render(main + "\n" + help)
 }
 
 func (m Model) renderInboxMain(width, height int) string {
-	contentWidth := min(104, max(36, width-8))
 	endpoint := first(strings.TrimSpace(m.options.Endpoint), "Mango Cloud")
-	header := m.brandLogo(true) + "\n\n" +
-		gradientText(lipgloss.NewStyle(), "Cloud sessions", true, m.theme.accent, m.theme.blue) + "\n" +
-		m.theme.dim.Render(truncate(endpoint, contentWidth))
-	rows := make([]string, 0, len(m.sessions)+3)
-	visible := max(1, height-lipgloss.Height(header)-8)
-	start, end := visibleRange(len(m.sessions)+3, m.inboxCursor, visible)
+	// Top strip: brand + endpoint + fleet stats + tagline. This is the "who am
+	// I connected to and what's the fleet doing" band, kept identical whether
+	// or not a session is selected.
+	header := lipgloss.NewStyle().Padding(0, 2).Render(strings.Join([]string{
+		m.brandLogo(true),
+		"",
+		gradientText(lipgloss.NewStyle(), "Cloud sessions", true, m.theme.accent, m.theme.blue),
+		m.theme.dim.Render(truncate(endpoint, width-4)),
+		"",
+		m.renderInboxStatus(width - 4),
+	}, "\n"))
+
+	// Toolbar: three action pills on one row.
+	toolbar := lipgloss.NewStyle().Padding(0, 2).Render(m.renderInboxToolbar())
+
+	// The grid gets whatever vertical room the header + toolbar + help leaves.
+	// header height + 1 blank + toolbar (1) + 1 blank
+	used := lipgloss.Height(header) + lipgloss.Height(toolbar) + 2
+	gridHeight := max(6, height-used)
+
+	sessionCount := len(m.sessions)
+	twoColumn := !m.compact && width >= 120 && sessionCount > 0
+	var grid string
+	if twoColumn {
+		listWidth := width * 55 / 100
+		previewWidth := width - listWidth - 2
+		list := m.renderInboxList(listWidth, gridHeight)
+		preview := m.renderInboxPreview(previewWidth, gridHeight)
+		grid = lipgloss.JoinHorizontal(lipgloss.Top, list, "  ", preview)
+	} else {
+		grid = m.renderInboxList(width, gridHeight)
+	}
+	return strings.Join([]string{header, "", toolbar, "", grid}, "\n")
+}
+
+// renderInboxToolbar prints the three top-of-page action buttons. Sitting on
+// the cursor still highlights the button the same way it used to highlight a
+// list row, so muscle memory (Enter on cursor 0 = New Session) is preserved.
+func (m Model) renderInboxToolbar() string {
+	labels := []string{"+ New", "/ Find", "↻ Refresh"}
+	pills := make([]string, 0, 3)
+	for index, label := range labels {
+		pills = append(pills, choice(m.theme, label, m.inboxCursor == index, false))
+	}
+	return strings.Join(pills, "  ")
+}
+
+// renderInboxList is the durable-Session list column. Rows are compact but
+// carry every fleet signal that matters at a glance: state pip, title, state
+// text, activity time, sub-agent count, and the recently-attached badge.
+func (m Model) renderInboxList(width, height int) string {
+	if len(m.sessions) == 0 {
+		body := m.theme.dim.Render("No durable Sessions yet. Press ") +
+			m.theme.active.Render("n") + m.theme.dim.Render(" to start one.")
+		return lipgloss.NewStyle().Width(width).Height(height).Padding(0, 2).Render(body)
+	}
+	contentWidth := max(20, width-4)
+	rows := make([]string, 0, len(m.sessions))
+	rowHeight := 2
+	visible := max(2, (height-1)/(rowHeight+1))
+	visible = min(visible, len(m.sessions))
+	listCursor := m.inboxCursor - 3
+	if listCursor < 0 {
+		listCursor = 0
+	}
+	start, end := visibleRange(len(m.sessions), listCursor, visible)
 	now := time.Now()
 	for index := start; index < end; index++ {
-		marker, titleStyle := "  ", lipgloss.NewStyle().Foreground(m.theme.text)
-		if index == m.inboxCursor {
-			marker, titleStyle = "› ", m.theme.active
-		}
-		if index == 0 {
-			rows = append(rows, marker+titleStyle.Render("Create a new Session")+"\n"+
-				"    "+m.theme.dim.Render("Choose an Agent, Environment, title, and first message"))
-			continue
-		}
-		if index == 1 {
-			rows = append(rows, marker+titleStyle.Render("Find a Session")+"\n"+
-				"    "+m.theme.dim.Render("Search every durable Session"))
-			continue
-		}
-		if index == 2 {
-			rows = append(rows, marker+titleStyle.Render("Refresh from Cloud")+"\n"+
-				"    "+m.theme.dim.Render("Fetch the latest Session states"))
-			continue
-		}
-		rows = append(rows, m.renderInboxSessionRow(m.sessions[index-3], contentWidth, marker, titleStyle, now))
+		rows = append(rows, m.renderInboxSessionRow(m.sessions[index], contentWidth, index+3 == m.inboxCursor, now))
 	}
-	status := m.renderInboxStatus(contentWidth)
-	content := strings.Join([]string{header, "", status, "", strings.Join(rows, "\n\n")}, "\n")
-	return lipgloss.NewStyle().Width(width).Height(max(5, height)).Padding(1, 3).
-		Render(lipgloss.NewStyle().Width(contentWidth).Render(content))
+	body := strings.Join(rows, "\n\n")
+	return lipgloss.NewStyle().Width(width).Height(height).Padding(0, 2).Render(body)
 }
 
 // renderInboxStatus is the fleet-scoped line under the endpoint. It replaces
@@ -630,11 +605,16 @@ func (m Model) renderInboxStatus(contentWidth int) string {
 // Session the user just detached from. The second line packs Agent identity,
 // subagent-count, and relative activity so a glance separates a live turn from
 // an idle Session.
-func (m Model) renderInboxSessionRow(session mango.Session, contentWidth int, marker string, titleStyle lipgloss.Style, now time.Time) string {
+func (m Model) renderInboxSessionRow(session mango.Session, contentWidth int, selected bool, now time.Time) string {
+	marker := "  "
+	titleStyle := lipgloss.NewStyle().Foreground(m.theme.text)
+	if selected {
+		marker, titleStyle = "› ", m.theme.active
+	}
 	pip := sessionStatePip(m.theme, session.Status)
 	returnMark := ""
 	if session.ID != "" && session.ID == m.lastAttachedID {
-		returnMark = "  " + m.theme.active.Render("⤴ recently attached")
+		returnMark = "  " + m.theme.active.Render("⤴")
 	}
 	nameWidth := max(12, contentWidth-ansi.StringWidth(marker)-ansi.StringWidth(pip)-1-
 		ansi.StringWidth(ansi.Strip(returnMark))-1-ansi.StringWidth(stateText(m.theme, session.Status))-1)
@@ -654,6 +634,90 @@ func (m Model) renderInboxSessionRow(session mango.Session, contentWidth int, ma
 	metaParts = append(metaParts, shortID(session.ID))
 	meta := strings.Join(metaParts, " · ")
 	return head + "\n    " + m.theme.dim.Render(trimOneLine(meta, contentWidth-4))
+}
+
+// renderInboxPreview is the right-side detail card shown on wide terminals.
+// It reveals everything the operator would need to decide "attach or not"
+// without reading the compact left list row twice.
+func (m Model) renderInboxPreview(width, height int) string {
+	if m.inboxCursor < 3 {
+		return m.renderToolbarHelpCard(width, height)
+	}
+	index := m.inboxCursor - 3
+	if index < 0 || index >= len(m.sessions) {
+		return lipgloss.NewStyle().Width(width).Height(height).Render("")
+	}
+	session := m.sessions[index]
+	inner := max(4, width-6)
+	title := m.theme.title.Render(truncate(first(session.Title, "Untitled Session"), inner))
+	rule := m.theme.dim.Render(strings.Repeat("─", inner))
+	rows := []string{title, stateText(m.theme, session.Status), rule}
+	rows = append(rows, m.previewField("Agent", first(session.Agent.Name, "unknown"), inner))
+	if model := strings.TrimSpace(session.Agent.Model.ID); model != "" {
+		rows = append(rows, m.previewField("Model", model, inner))
+	}
+	if env := strings.TrimSpace(session.EnvironmentID); env != "" {
+		rows = append(rows, m.previewField("Environment", shortID(env), inner))
+	}
+	rows = append(rows, m.previewField("Sub-agents", m.previewSubagentsValue(session), inner))
+	if session.Usage.InputTokens+session.Usage.OutputTokens > 0 {
+		rows = append(rows, m.previewField("Tokens",
+			compactTokens(session.Usage.InputTokens)+" in  /  "+compactTokens(session.Usage.OutputTokens)+" out", inner))
+	}
+	if session.Stats.ActiveSeconds > 0 {
+		rows = append(rows, m.previewField("Active", fmt.Sprintf("%.1fs", session.Stats.ActiveSeconds), inner))
+	}
+	if since := humanizeSince(recency(session), time.Now()); since != "" {
+		rows = append(rows, m.previewField("Activity", since, inner))
+	}
+	rows = append(rows, m.previewField("ID", shortID(session.ID), inner))
+	if session.ID != "" && session.ID == m.lastAttachedID {
+		rows = append(rows, "", m.theme.active.Render("⤴ recently attached"))
+	}
+	rows = append(rows, "", m.theme.dim.Render("enter to attach"))
+	body := strings.Join(rows, "\n")
+	return lipgloss.NewStyle().Width(width).Height(height).Padding(0, 1).
+		Border(lipgloss.RoundedBorder()).BorderForeground(m.theme.border).Render(body)
+}
+
+// renderToolbarHelpCard shows a short explanation for the pill the operator's
+// cursor is currently sitting on. It fills the right column when no Session
+// is highlighted so the pane never renders as dead space.
+func (m Model) renderToolbarHelpCard(width, height int) string {
+	inner := max(4, width-6)
+	title := "Getting started"
+	body := "Move the cursor down to inspect a Session, or press Enter on a pill."
+	switch m.inboxCursor {
+	case 0:
+		title, body = "Create a new Session", "Choose an Agent, an Environment, a title, and an optional first message. The Session is durable — you can detach and come back to it any time."
+	case 1:
+		title, body = "Find a Session", "Search every durable Session by title, Agent name, or ID. Useful when the fleet grows beyond the visible list."
+	case 2:
+		title, body = "Refresh from Cloud", "Re-fetch the Session list from Mango. Sessions keep running in the cloud after you detach, so their state may have moved since you last looked."
+	}
+	head := m.theme.title.Render(truncate(title, inner))
+	rule := m.theme.dim.Render(strings.Repeat("─", inner))
+	content := head + "\n" + rule + "\n" + m.theme.dim.Render(lipgloss.NewStyle().Width(inner).Render(body))
+	return lipgloss.NewStyle().Width(width).Height(height).Padding(0, 1).
+		Border(lipgloss.RoundedBorder()).BorderForeground(m.theme.border).Render(content)
+}
+
+func (m Model) previewField(label, value string, width int) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	labelWidth := 12
+	label = m.theme.dim.Render(fmt.Sprintf("%-*s", labelWidth, label))
+	value = truncate(value, max(4, width-labelWidth-2))
+	return label + "  " + value
+}
+
+func (m Model) previewSubagentsValue(session mango.Session) string {
+	roster := subagentCount(session)
+	if roster == 0 {
+		return "single Agent"
+	}
+	return fmt.Sprintf("%d in roster", roster)
 }
 
 func sessionStatePip(t theme, status string) string {
