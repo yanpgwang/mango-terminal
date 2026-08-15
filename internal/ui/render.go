@@ -531,7 +531,9 @@ func (m Model) renderInboxFleetSummary() string {
 		return m.theme.danger.Render(trimOneLine(m.err.Error(), 60))
 	}
 	counts := summarizeFleet(m.sessions)
-	parts := []string{m.theme.success.Render("CONNECTED")}
+	badge := lipgloss.NewStyle().Background(m.theme.green).Foreground(m.theme.panel).
+		Bold(true).Padding(0, 1).Render("CONNECTED")
+	parts := []string{badge}
 	if counts.needsAction > 0 {
 		parts = append(parts, m.theme.warning.Render(fmt.Sprintf("%d needs input", counts.needsAction)))
 	}
