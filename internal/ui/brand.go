@@ -1,41 +1,13 @@
 package ui
 
 import (
-	"image/color"
 	"strings"
 
 	"charm.land/lipgloss/v2"
-	"github.com/rivo/uniseg"
 )
-
-var (
-	mangoFruitColor = lipgloss.Color("#FF9D18")
-	mangoLinkColor  = lipgloss.Color("#3157D5")
-)
-
-// gradientText splits by grapheme cluster, blends a color ramp, then styles
-// every printable cluster. It keeps CJK and emoji intact instead of slicing
-// UTF-8 bytes.
-func gradientText(base lipgloss.Style, value string, bold bool, from, to color.Color) string {
-	graphemes := uniseg.NewGraphemes(value)
-	clusters := make([]string, 0, len(value))
-	for graphemes.Next() {
-		clusters = append(clusters, graphemes.Str())
-	}
-	if len(clusters) == 0 {
-		return ""
-	}
-	ramp := lipgloss.Blend1D(len(clusters), from, to)
-	var output strings.Builder
-	for index, cluster := range clusters {
-		style := base.Foreground(ramp[index]).Bold(bold)
-		output.WriteString(style.Render(cluster))
-	}
-	return output.String()
-}
 
 func (m Model) brandWord(value string) string {
-	return gradientText(lipgloss.NewStyle(), value, true, mangoFruitColor, mangoLinkColor)
+	return lipgloss.NewStyle().Foreground(m.theme.accent).Bold(true).Render(value)
 }
 
 // mangoWordmark is the quiet welcome scene used by the centered connect

@@ -193,6 +193,7 @@ func (m *Model) resize() {
 	chatHeight := max(3, m.height-headerHeight-composerHeight-2)
 	m.chat.SetWidth(innerWidth)
 	m.chat.SetHeight(chatHeight)
+	m.refreshChatMetrics()
 }
 
 func (m Model) composerHeight() int {
@@ -273,7 +274,58 @@ func (m Model) renderConversationColumn(width, height int) string {
 }
 
 func (m Model) renderConversationViewport(width int) string {
-	return lipgloss.NewStyle().Width(width).Height(m.chat.Height()).Padding(0, 1).Render(m.chat.View())
+	height := m.chat.Height()
+	bar := strings.Join(m.conversationScrollbar(height), "\n")
+	body := lipgloss.NewStyle().Width(max(1, width-1)).Height(height).PaddingLeft(1).Render(m.chat.View())
+	return lipgloss.JoinHorizontal(lipgloss.Top, bar, body)
+}
+
+// conversationScrollbar draws a one-column Crush-style gutter: a dim track with
+// a thumb whose size reflects how much of the transcript is visible and whose
+// position follows the scroll offset. The thumb turns accent while the
+// conversation holds focus, doubling as the pane's focus indicator.
+//
+// It reads only cached/cheap values (chatLines, YOffset, Height) so scrolling
+// never triggers the viewport's O(total lines) soft-wrap recomputation.
+func (m Model) conversationScrollbar(height int) []string {
+	lines := make([]string, max(0, height))
+	if height <= 0 {
+		return lines
+	}
+	pos, thumb := scrollThumb(height, m.chatLines, m.chat.YOffset())
+
+	thumbColor := m.theme.muted
+	if m.focus == focusChat {
+		thumbColor = m.theme.accent
+	}
+	track := lipgloss.NewStyle().Foreground(m.theme.border).Render("│")
+	head := lipgloss.NewStyle().Foreground(thumbColor).Render("█")
+	for row := range lines {
+		if row >= pos && row < pos+thumb {
+			lines[row] = head
+		} else {
+			lines[row] = track
+		}
+	}
+	return lines
+}
+
+// scrollThumb sizes and positions a scrollbar thumb for a gutter of the given
+// height, a transcript of total wrapped lines, scrolled to yoffset. When the
+// content fits, the thumb fills the gutter.
+func scrollThumb(height, total, yoffset int) (pos, size int) {
+	if height <= 0 {
+		return 0, 0
+	}
+	if total <= height {
+		return 0, height
+	}
+	size = max(1, height*height/total)
+	if size > height {
+		size = height
+	}
+	pos = clamp((height-size)*yoffset/(total-height), 0, height-size)
+	return pos, size
 }
 
 // renderSessionHeader keeps the durable Session and the observed Agent visible
@@ -417,6 +469,7 @@ func (m Model) delegationPreview(threadID string) string {
 func (m *Model) renderChat() {
 	if m.threadCursor < 0 || m.threadCursor >= len(m.threads) {
 		m.chat.SetContent(m.theme.dim.Render("Waiting for the primary Agent…"))
+		m.refreshChatMetrics()
 		return
 	}
 	items := feed.Project(m.threads[m.threadCursor], m.events[m.currentThreadID()])
@@ -446,9 +499,17 @@ func (m *Model) renderChat() {
 		parts = append(parts, m.theme.dim.Render("No messages yet. Ask the coordinator to begin."))
 	}
 	m.chat.SetContent(strings.Join(parts, "\n\n"))
+	m.refreshChatMetrics()
 	if m.follow {
 		m.chat.GotoBottom()
 	}
+}
+
+// refreshChatMetrics caches the transcript's wrapped line count so the
+// scrollbar can be drawn from cheap field reads. It runs only when the content
+// or viewport size changes — never on every scroll frame.
+func (m *Model) refreshChatMetrics() {
+	m.chatLines = m.chat.TotalLineCount()
 }
 
 func (m *Model) renderFeedItem(item feed.Item, selected bool, width int) string {
@@ -948,12 +1009,6 @@ func (m Model) renderDialog() string {
 		)
 	}
 	box := m.dialogTitle(title) + "\n" + m.dialogRule(innerWidth) + "\n\n" + content
-	if m.dialog == dialogQuit {
-		// Quitting stays calm: a solid title and rule instead of the branded
-		// gradient used elsewhere.
-		box = m.theme.title.Render(title) + "\n" +
-			m.theme.dim.Render(strings.Repeat("─", max(0, innerWidth))) + "\n\n" + content
-	}
 	return lipgloss.NewStyle().Width(width).Padding(1, 2).Background(m.theme.panel).
 		Border(lipgloss.RoundedBorder()).BorderForeground(m.theme.border).Render(box)
 }

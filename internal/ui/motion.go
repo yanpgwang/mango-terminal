@@ -14,9 +14,8 @@ func (m Model) activity(label string) string {
 	}
 	frames := []string{"╱─", "──", "─╲", "─│", "─╱", "──", "╲─", "│─"}
 	frame := m.motion % len(frames)
-	style := lipgloss.NewStyle()
 	dots := []string{"", ".", "..", "..."}[(m.motion/3)%4]
-	return gradientText(style, frames[frame], false, m.theme.accent, m.theme.blue) + "  " + m.theme.dim.Render(label+dots)
+	return lipgloss.NewStyle().Foreground(m.theme.accent).Render(frames[frame]) + "  " + m.theme.dim.Render(label+dots)
 }
 
 // fruitThinking is Mango's privacy-safe thinking signal. The server exposes
@@ -68,5 +67,5 @@ func (m Model) dialogTitle(value string) string {
 }
 
 func (m Model) dialogRule(width int) string {
-	return gradientText(lipgloss.NewStyle(), strings.Repeat("─", max(0, width)), false, m.theme.accent, m.theme.blue)
+	return m.theme.dim.Render(strings.Repeat("─", max(0, width)))
 }

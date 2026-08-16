@@ -1040,6 +1040,92 @@ func TestNotificationsAreDisabledUnlessExplicitlyEnabled(t *testing.T) {
 	}
 }
 
+func TestScrollThumbGeometry(t *testing.T) {
+	// Everything fits: the thumb fills the gutter.
+	if pos, size := scrollThumb(10, 8, 0); pos != 0 || size != 10 {
+		t.Fatalf("all-visible thumb=(%d,%d), want (0,10)", pos, size)
+	}
+	// 10% visible: a one-row thumb that starts at the top and reaches the
+	// bottom row at the maximum offset.
+	if _, size := scrollThumb(10, 100, 0); size != 1 {
+		t.Fatalf("thumb size=%d, want 1", size)
+	}
+	if pos, _ := scrollThumb(10, 100, 0); pos != 0 {
+		t.Fatalf("top thumb pos=%d, want 0", pos)
+	}
+	if pos, _ := scrollThumb(10, 100, 90); pos != 9 {
+		t.Fatalf("bottom thumb pos=%d, want 9", pos)
+	}
+}
+
+func TestConversationScrollbarTracksFocusAndPosition(t *testing.T) {
+	model := New(demo.New(), "")
+	model.loading = false
+	model.width, model.height, model.screen = 140, 42, screenChat
+	model.threads = []mango.Thread{{ID: "sthr_primary"}}
+	model.threadCursor = 0
+	model.resize()
+	model.chat.SetContent(strings.Repeat("conversation line\n", 300))
+	model.refreshChatMetrics()
+	model.focus = focusChat
+
+	width := model.workspaceMainWidth()
+	model.chat.GotoTop()
+	top := model.renderConversationViewport(width)
+	if lipgloss.Width(top) != width {
+		t.Fatalf("viewport width=%d, want %d", lipgloss.Width(top), width)
+	}
+	// The focused conversation carries an accent scrollbar with a track and a
+	// thumb, mirroring the Crush gutter.
+	if !strings.Contains(top, "255;138;61") {
+		t.Fatalf("focused scrollbar is not accent: %q", ansi.Strip(top))
+	}
+	plainTop := ansi.Strip(top)
+	if !strings.Contains(plainTop, "█") || !strings.Contains(plainTop, "│") {
+		t.Fatalf("scrollbar missing thumb/track: %q", plainTop)
+	}
+
+	model.chat.GotoBottom()
+	plainBottom := ansi.Strip(model.renderConversationViewport(width))
+	if firstRowWith(plainTop, '█') == firstRowWith(plainBottom, '█') {
+		t.Fatalf("scrollbar thumb did not move between top and bottom")
+	}
+}
+
+func firstRowWith(block string, target rune) int {
+	for index, line := range strings.Split(block, "\n") {
+		if strings.ContainsRune(line, target) {
+			return index
+		}
+	}
+	return -1
+}
+
+func TestManageDialogTitleHasNoGradient(t *testing.T) {
+	model := New(demo.New(), "")
+	model.width, model.height, model.screen = 100, 30, screenInbox
+	model.openSessionManager(mango.Session{ID: "sesn_x", Title: "Launch"}, dialogNone)
+	model.resize()
+	for _, line := range strings.Split(model.renderDialog(), "\n") {
+		if strings.Contains(ansi.Strip(line), "Manage Session") {
+			if strings.Contains(line, "255;157;24") || strings.Contains(line, "49;87;213") {
+				t.Fatalf("manage title still uses the fruit→link gradient: %q", line)
+			}
+			return
+		}
+	}
+	t.Fatal("manage dialog has no title line")
+}
+
+func TestActivitySpinnerHasNoGradient(t *testing.T) {
+	model := New(demo.New(), "")
+	// theme.blue (#6F8CFF → 111;140;255) is the far end of the old spinner
+	// gradient; a solid spinner must not blend toward it.
+	if spinner := model.activity("Connecting"); strings.Contains(spinner, "111;140;255") {
+		t.Fatalf("activity spinner still blends toward blue: %q", spinner)
+	}
+}
+
 func TestQuitDialogTitleHasNoGradient(t *testing.T) {
 	model := New(demo.New(), "")
 	model.width, model.height, model.screen = 100, 30, screenChat

@@ -140,15 +140,16 @@ type Model struct {
 	expanded     map[string]bool
 	fresh        map[string]int
 
-	chat    viewport.Model
-	editor  textarea.Model
-	filter  textinput.Model
-	spinner spinner.Model
-	theme   theme
-	connect connectState
-	compact bool
-	follow  bool
-	motion  int
+	chat      viewport.Model
+	chatLines int // cached wrapped line count; recomputed only on content/size change
+	editor    textarea.Model
+	filter    textinput.Model
+	spinner   spinner.Model
+	theme     theme
+	connect   connectState
+	compact   bool
+	follow    bool
+	motion    int
 
 	loading         bool
 	loadingLabel    string
