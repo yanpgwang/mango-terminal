@@ -51,8 +51,6 @@ func (m Model) View() tea.View {
 	switch m.screen {
 	case screenInbox:
 		content = m.renderInbox()
-	case screenBoard:
-		content = m.renderBoard()
 	case screenChat:
 		content = m.renderWorkspace()
 	}
@@ -107,14 +105,17 @@ func (m Model) viewCursor() *tea.Cursor {
 		if m.focus != focusEditor {
 			return nil
 		}
-		if m.screen != screenChat && m.screen != screenBoard {
+		if m.screen != screenChat {
 			return nil
 		}
 		source = m.editor.Cursor()
-		above := m.linesAboveComposer(m.width)
-		// Composer sits on the line right after `above`. strings.Join already
-		// puts a newline between them, so the composer's first row is exactly
-		// `Height(above)` (0-indexed) — no additional +1 offset is needed.
+		above := []string{
+			m.renderSessionHeader(m.width),
+			m.renderConversationViewport(m.workspaceMainWidth()),
+			m.renderConversationInfo(m.workspaceMainWidth()),
+		}
+		// The composer is part of the left workspace column. The right rail has
+		// no bearing on its native terminal cursor or IME anchor.
 		yOffset = lipgloss.Height(strings.Join(above, "\n"))
 	}
 	if source == nil {
@@ -166,7 +167,7 @@ func (m *Model) resize() {
 		return
 	}
 	m.compact = m.width < 120 || m.height < 30
-	innerWidth := max(20, m.width-2)
+	innerWidth := max(20, m.workspaceMainWidth()-2)
 	m.editor.MaxHeight = 15
 	if m.dialogUsesEditor() {
 		innerWidth = max(12, dialogInnerWidth(m.dialogWidth())-4)
@@ -175,18 +176,12 @@ func (m *Model) resize() {
 	m.editor.SetWidth(innerWidth)
 	m.filter.SetWidth(max(12, dialogInnerWidth(m.dialogWidth())-3))
 	composerHeight := m.composerHeight()
-	// Chat viewport: header (2) + convInfo (1) + help (1) + a bit of slack.
-	chatHeight := max(3, m.height-composerHeight-6)
+	// Chat viewport consumes the left column below the shared Session header.
+	// Conversation info and help each own one line beneath it.
+	headerHeight := lipgloss.Height(m.renderSessionHeader(m.width))
+	chatHeight := max(3, m.height-headerHeight-composerHeight-2)
 	m.chat.SetWidth(innerWidth)
 	m.chat.SetHeight(chatHeight)
-}
-
-// boardBodyHeight is the vertical space between the Board header and the
-// composer. Both View() and viewCursor() see the same number so the caret
-// never drifts off the composer's real position.
-func (m Model) boardBodyHeight() int {
-	// Board: header (2) + body + composer + help (1) + a bit of slack.
-	return max(3, m.height-m.composerHeight()-6)
 }
 
 func (m Model) composerHeight() int {
@@ -228,35 +223,51 @@ func (m Model) dialogUsesFilter() bool {
 
 func (m Model) renderWorkspace() string {
 	width, height := max(1, m.width), max(1, m.height)
-	parts := append([]string(nil), m.linesAboveComposer(width)...)
-	parts = append(parts,
+	header := m.renderSessionHeader(width)
+	mainWidth := m.workspaceMainWidth()
+	bodyHeight := max(1, height-lipgloss.Height(header))
+	main := m.renderConversationColumn(mainWidth, bodyHeight)
+	if !m.hasAgentRail() {
+		return lipgloss.NewStyle().Width(width).Height(height).Render(header + "\n" + main)
+	}
+	rail := m.renderAgentWorkspace(m.workspaceRailWidth(), bodyHeight)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, main, rail)
+	return lipgloss.NewStyle().Width(width).Height(height).Render(header + "\n" + body)
+}
+
+func (m Model) hasAgentRail() bool {
+	return !m.compact && m.width >= 120 && m.height >= 30
+}
+
+func (m Model) workspaceRailWidth() int {
+	if !m.hasAgentRail() {
+		return 0
+	}
+	return clamp(m.width*28/100, 34, 40)
+}
+
+func (m Model) workspaceMainWidth() int {
+	return max(20, m.width-m.workspaceRailWidth())
+}
+
+func (m Model) renderConversationColumn(width, height int) string {
+	parts := []string{
+		m.renderConversationViewport(width),
+		m.renderConversationInfo(width),
 		m.renderComposer(width),
 		m.renderHelp(width),
-	)
+	}
 	return lipgloss.NewStyle().Width(width).Height(height).Render(strings.Join(parts, "\n"))
 }
 
-// linesAboveComposer returns the ordered slice of rendered rows that sit above
-// the composer for the current screen. Both View() and viewCursor() consume it
-// so a change in one place cannot desync the caret from the layout below.
-func (m Model) linesAboveComposer(width int) []string {
-	if m.screen == screenBoard {
-		return []string{
-			m.renderBoardHeader(width),
-			m.renderBoardBody(width, m.boardBodyHeight()),
-		}
-	}
-	return []string{
-		m.renderChatHeader(width),
-		lipgloss.NewStyle().Width(width).Height(m.chat.Height()).Padding(0, 1).Render(m.chat.View()),
-		m.renderConversationInfo(width),
-	}
+func (m Model) renderConversationViewport(width int) string {
+	return lipgloss.NewStyle().Width(width).Height(m.chat.Height()).Padding(0, 1).Render(m.chat.View())
 }
 
-// renderChatHeader labels the zoomed Thread and shows the way back to the
-// Board. It replaces the older compact-mode-only header so the operator can
-// always see which specialist they are looking at, not just which coordinator.
-func (m Model) renderChatHeader(width int) string {
+// renderSessionHeader keeps the durable Session and the observed Agent visible
+// at once. On compact terminals the right rail collapses into a one-line roster
+// strip instead of forcing a second navigation screen.
+func (m Model) renderSessionHeader(width int) string {
 	name := "Agent"
 	status := ""
 	role := ""
@@ -270,12 +281,30 @@ func (m Model) renderChatHeader(width int) string {
 			role = "sub-agent"
 		}
 	}
-	back := m.theme.dim.Render("‹ Board") + "  " + m.theme.dim.Render("esc")
-	prefixWidth := ansi.StringWidth(ansi.Strip(back)) + 4 + ansi.StringWidth(ansi.Strip(status)) + 3 + ansi.StringWidth(role)
-	name = truncate(name, max(4, width-4-prefixWidth))
-	middle := m.theme.title.Render(name) + "  " + m.theme.dim.Render(role) + "  " + status
-	line := lipgloss.NewStyle().Width(width).Padding(0, 2).Render(joinSides(back, middle, width-4))
-	return line + "\n" + m.theme.dim.Render(strings.Repeat("─", width))
+	backLabel := "‹ Sessions"
+	if m.currentThreadID() != "" && !m.currentThreadPrimary() {
+		backLabel = "‹ coordinator"
+	}
+	back := m.theme.dim.Render(backLabel) + "  " + m.theme.dim.Render("esc")
+	sessionTitle := "Managed Session"
+	if m.session != nil {
+		sessionTitle = first(m.session.Title, sessionTitle)
+	}
+	right := m.theme.title.Render(name)
+	if !strings.EqualFold(name, role) {
+		right += "  " + m.theme.dim.Render(role)
+	}
+	if status != "" {
+		right += "  " + status
+	}
+	leftWidth := max(8, width-ansi.StringWidth(ansi.Strip(right))-ansi.StringWidth(ansi.Strip(back))-8)
+	left := back + "  " + m.theme.title.Render(truncate(sessionTitle, leftWidth))
+	line := lipgloss.NewStyle().Width(width).Padding(0, 2).Render(joinSides(left, right, width-4))
+	lines := []string{line, m.theme.dim.Render(strings.Repeat("─", width))}
+	if !m.hasAgentRail() && len(m.threads)+len(m.unspawnedRoster(m.specialistThreads())) > 1 {
+		lines = append(lines, m.renderCompactAgentStrip(width))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) renderComposer(width int) string {
@@ -310,6 +339,9 @@ func (m Model) renderConversationInfo(width int) string {
 	if activeSeconds > 0 {
 		text += fmt.Sprintf("  ·  %.1fs", activeSeconds)
 	}
+	if m.currentThreadID() != "" && !m.currentThreadPrimary() {
+		text = "viewing child transcript  ·  replies go to coordinator  ·  " + text
+	}
 	text = truncate(text, max(1, width-4))
 	return lipgloss.NewStyle().Width(width).Padding(0, 2).Align(lipgloss.Right).Render(m.theme.dim.Render(text))
 }
@@ -318,32 +350,26 @@ func (m Model) renderHelp(width int) string {
 	var text string
 	switch m.focus {
 	case focusEditor:
-		if m.screen == screenBoard {
-			text = "enter send  shift+enter newline  tab board  ctrl+n new  ctrl+p commands  esc back"
-			if width < 80 {
-				text = "enter send  tab board  ctrl+p commands  esc back"
-			}
-		} else {
-			text = "enter send  shift+enter newline  tab chat  ctrl+p commands  esc board"
-			if width < 80 {
-				text = "enter send  tab chat  ctrl+p commands  esc board"
-			}
-			if width >= 110 {
-				text += "  ctrl+g agents"
-			}
-		}
-	case focusBoard:
-		text = "↑↓ pick  enter zoom  z zoom  tab compose  esc Sessions"
+		text = "enter send to coordinator  shift+enter newline  tab conversation  ctrl+p commands  esc back"
 		if width < 80 {
-			text = "↑↓ pick  enter zoom  tab compose  esc"
+			text = "enter send  tab conversation  ctrl+p commands  esc back"
+		}
+	case focusAgents:
+		text = "↑↓ pick  enter open  space preview  x interrupt  tab compose  esc back"
+		if width < 40 {
+			text = "↑↓ pick  enter open  tab compose"
 		}
 	case focusChat:
-		text = "↑↓ scroll  enter expand  tab editor  esc board"
-		if width < 80 {
-			text = "↑↓ scroll  enter inspect  tab editor"
+		next := "editor"
+		if m.hasAgentRail() {
+			next = "subagents"
 		}
-		if width >= 110 {
-			text = "↑↓ scroll  shift+↑↓ select  enter inspect  tab editor  esc board"
+		text = "↑↓ scroll  enter expand  tab " + next + "  esc back"
+		if width < 80 {
+			text = "↑↓ scroll  enter inspect  tab editor  esc back"
+		}
+		if width >= 90 {
+			text = "↑↓ scroll  shift+↑↓ select  enter inspect  tab " + next + "  esc back"
 		}
 	}
 	if m.err != nil {
@@ -723,22 +749,23 @@ func sessionStatePip(t theme, status string) string {
 
 func (m Model) renderConnect() string {
 	width, height := max(1, m.width), max(1, m.height)
-	contentWidth := min(72, max(34, width-8))
+	contentWidth := min(58, max(34, width-2))
 	endpoint := first(strings.TrimSpace(m.options.Endpoint), "Mango Cloud")
 	lines := []string{
 		m.brandLogo(false),
 		"",
-		gradientText(lipgloss.NewStyle(), "Your window into managed Agents", true, m.theme.accent, m.theme.blue),
-		m.theme.dim.Render("Sessions keep running in the cloud after you detach."),
-		"",
-		m.theme.title.Render("Cloud"),
+		m.theme.title.Render("Connect to Mango Cloud"),
 		m.theme.dim.Render(truncate(endpoint, contentWidth)),
 		"",
 	}
 	if m.loading {
 		lines = append(lines, m.activity(first(m.loadingLabel, "Connecting to Mango Cloud")))
 	} else {
-		lines = append(lines, choice(m.theme, "Connect", true, false), "", m.theme.dim.Render("enter connect  ctrl+c quit"))
+		lines = append(lines,
+			choice(m.theme, "Connect", true, false),
+			m.theme.dim.Render("Sessions keep running after you leave this window."),
+			m.theme.dim.Render("enter connect  ctrl+c quit"),
+		)
 	}
 	if m.err != nil {
 		lines = append(lines, "", m.theme.danger.Render(trimOneLine(m.err.Error(), contentWidth)))

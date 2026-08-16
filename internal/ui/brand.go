@@ -38,24 +38,31 @@ func (m Model) brandWord(value string) string {
 	return gradientText(lipgloss.NewStyle(), value, true, mangoFruitColor, mangoLinkColor)
 }
 
-// mangoWordmark composes a six-row block letterform, then paints each row with
-// a horizontal color ramp. Every glyph shares one cap height and baseline;
-// half blocks are reserved for rounded edges instead of changing its height.
+// mangoWordmark is the restrained welcome scene used by the centered connect
+// screen. It borrows the quiet horizon and sparse accent treatment of a modern
+// terminal onboarding flow without turning the product name into a wall of
+// block letters.
 func (m Model) mangoWordmark() string {
+	const width = 58
+	title := m.theme.active.Render("Welcome to Mango")
+	subtitle := m.theme.dim.Render("managed agents, one window")
+	header := joinSides(title, subtitle, width)
+	fruit := func(value string) string {
+		return gradientText(lipgloss.NewStyle(), value, false, mangoFruitColor, m.theme.accent)
+	}
 	lines := []string{
-		"██    ██  " + "  ▄██▄    " + "██    ██  " + " ▄████▄   " + " ▄████▄ ",
-		"███  ███  " + " ▄█  █▄   " + "███   ██  " + "██    ██  " + "██    ██",
-		"████████  " + "██    ██  " + "████  ██  " + "██        " + "██    ██",
-		"██ ██ ██  " + "████████  " + "██ ██ ██  " + "██  ████  " + "██    ██",
-		"██    ██  " + "██    ██  " + "██  ████  " + "██    ██  " + "██    ██",
-		"██    ██  " + "██    ██  " + "██   ███  " + " ▀████▀   " + " ▀████▀ ",
+		header,
+		m.theme.dim.Render(strings.Repeat("…", width)),
+		"",
+		m.theme.dim.Render("                         ·                    ╭────╮"),
+		"             " + fruit("▄▀") + m.theme.dim.Render("                         ╭──╯    ╰─╮"),
+		"          " + fruit("▄████▄") + m.theme.dim.Render("                     ╰──────────╯"),
+		"         " + fruit("████████") + m.theme.dim.Render("          ·"),
+		"          " + fruit("▀████▀") + m.theme.dim.Render("                           ·"),
+		"             " + fruit("╲╱") + m.theme.dim.Render("              ╭──────╮"),
+		m.theme.dim.Render("……………………………………………………………………………………………………………╯      ╰………………………"),
 	}
-	for index, line := range lines {
-		lines[index] = gradientText(lipgloss.NewStyle(), line, false, mangoFruitColor, mangoLinkColor)
-	}
-	wordmark := strings.Join(lines, "\n")
-	attribution := m.theme.dim.Render("powered by Bubble Tea")
-	return wordmark + "\n\n" + lipgloss.PlaceHorizontal(lipgloss.Width(wordmark), lipgloss.Center, attribution)
+	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
 }
 
 // brandLogo uses a compact text treatment in supporting views and a larger

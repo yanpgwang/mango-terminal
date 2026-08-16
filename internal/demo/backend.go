@@ -43,6 +43,15 @@ func New() *Backend {
 	primary := thread("sthr_demo_primary", "", "coordinator", "idle")
 	researcher := thread("sthr_demo_researcher", primary.ID, "researcher", "idle")
 	reviewer := thread("sthr_demo_reviewer", primary.ID, "reviewer", "idle")
+	researcher.Stats.ActiveSeconds = 31.4
+	researcher.Usage.InputTokens, researcher.Usage.OutputTokens = 5720, 684
+	reviewer.Stats.ActiveSeconds = 78.2
+	reviewer.Usage.InputTokens, reviewer.Usage.OutputTokens = 9040, 1130
+	session.Agent.Multiagent = &mango.Multiagent{Type: "supervisor", Agents: []mango.AgentReference{
+		{Type: "agent", ID: researcher.Agent.ID, Version: 1, Name: researcher.Agent.Name},
+		{Type: "agent", ID: reviewer.Agent.ID, Version: 1, Name: reviewer.Agent.Name},
+		{Type: "agent", ID: "agent_demo_writer", Version: 1, Name: "writer"},
+	}}
 	timeText := func(offset time.Duration) string { return now.Add(offset).Format(time.RFC3339Nano) }
 	text := func(value string) []any { return []any{map[string]any{"type": "text", "text": value}} }
 	events := map[string][]mango.Event{
@@ -87,6 +96,8 @@ func thread(id, parentID, name, status string) mango.Thread {
 		thread.ParentThreadID = &parentID
 	}
 	thread.Agent.Name = name
+	thread.Agent.ID = "agent_demo_" + name
+	thread.Agent.Version = 1
 	thread.Agent.Model.ID = "claude-sonnet-4-5"
 	return thread
 }

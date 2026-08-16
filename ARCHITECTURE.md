@@ -70,18 +70,29 @@ endpoint yet. Likewise, the Session home refreshes the Session list explicitly
 because the current API exposes SSE per Session and per Thread, not one
 workspace-wide activity stream.
 
-Inside an attached Session, the composer and conversation are the only two
-focus states. The wide sidebar is passive Session context; it never steals
-keyboard focus and never changes the observed Thread. Agent inspection is
-explicit through a searchable picker. Sending always targets the coordinator,
-matching the server contract. `Esc` detaches back to the Session home;
+Inside an attached Session, wide terminals have three focus states: composer,
+conversation, and Subagent workspace. The coordinator conversation and the
+Agent roster remain visible together; choosing a child changes only the
+transcript projected into the left viewport. The rail derives task, latest
+activity, unread state, usage, and pending-action ownership from the same
+Thread ledgers used by the conversation. Roster members without a Thread are
+visible but non-interactive. Compact terminals collapse the rail into a status
+strip and retain the searchable Agent picker.
+
+Sending always targets the coordinator, matching the server contract. Sending
+while inspecting a child first returns observation to the primary Thread, so an
+optimistic preview can never appear on the wrong ledger. `Esc` returns from a
+child transcript to the coordinator, then detaches back to the Session home;
 interrupting work is a separate confirmed action.
 
 The conversation is a single visual stream. User messages use an accent rail,
 assistant text grows in place from SSE deltas, tools remain compact until
 expanded, and action gates open a focused, input-guarded decision dialog. The
-current Thread's model and token usage sit directly below the conversation;
-the passive sidebar is reserved for Session and Agent navigation.
+current Thread's model and token usage sit directly below the conversation.
+The right workspace keeps child status, delegation task, latest meaningful
+activity, usage, unread count, undelegated roster entries, and the currently
+relevant pending action visible without fabricating progress percentages or
+ETAs the protocol does not provide.
 
 With no attached Session, there is no chat editor. The home screen is a durable
 Session list with visible create, find, and refresh choices. Session creation
@@ -101,10 +112,11 @@ freely; only final events enter `internal/feed`. Motion can be disabled. Termina
 suppresses notifications while the user is already looking at Mango, and raw
 terminal notification protocols require explicit opt-in.
 
-At 120×30 and above, the sidebar occupies 32 columns on the right. Smaller
-terminals use a compact header and keep the conversation, activity strip, and
-editor in one column. Below 60×20 the renderer replaces the workspace with a
-bounded resize prompt; it never invents a larger canvas than the terminal.
+At 120×30 and above, the Subagent workspace occupies 34–40 columns on the
+right. Smaller terminals use a compact roster strip and keep the conversation,
+activity, and editor in one column. Below 60×20 the renderer replaces the
+workspace with a bounded resize prompt; it never invents a larger canvas than
+the terminal.
 
 ## Demo backend
 

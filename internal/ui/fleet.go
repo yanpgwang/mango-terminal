@@ -106,5 +106,30 @@ func subagentCount(session mango.Session) int {
 	if session.Agent.Multiagent == nil {
 		return 0
 	}
-	return len(session.Agent.Multiagent.Agents)
+	seenIDs := map[string]struct{}{}
+	seenNames := map[string]struct{}{}
+	count := 0
+	for _, reference := range session.Agent.Multiagent.Agents {
+		if reference.ID != "" && reference.ID == session.Agent.ID {
+			continue
+		}
+		if reference.ID != "" {
+			if _, duplicate := seenIDs[reference.ID]; duplicate {
+				continue
+			}
+		}
+		if reference.Name != "" {
+			if _, duplicate := seenNames[reference.Name]; duplicate {
+				continue
+			}
+		}
+		if reference.ID != "" {
+			seenIDs[reference.ID] = struct{}{}
+		}
+		if reference.Name != "" {
+			seenNames[reference.Name] = struct{}{}
+		}
+		count++
+	}
+	return count
 }

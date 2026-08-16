@@ -53,37 +53,44 @@ context and reconnect independently.
 
 The normal path is visible on screen and does not require memorizing commands:
 
-1. The central Mango mark connects to the configured control plane.
+1. The centered Mango welcome connects to the configured control plane.
 2. The home screen lists `Create a new Session`, `Find a Session`, `Refresh
    from Cloud`, and every durable Session.
 3. New Session is a sequence of searchable dialogs: Agent, Environment,
    Session details, review. `Create a new Agent` and `Create a cloud
    Environment` are ordinary choices in those lists.
-4. An attached Session shows its event conversation, live model previews,
-   Agent topology, and pending action dialogs. The selected Agent's model and
-   token usage stay in the conversation footer instead of the navigation rail.
+4. An attached Session opens one workspace: the coordinator conversation stays
+   on the left while a focusable Subagent workspace on the right shows every
+   live child, undelegated roster member, latest activity, usage, unread work,
+   and pending action. Opening a child swaps only the left transcript; the rail
+   remains visible.
 5. `Esc` returns to the Session home without interrupting remote work.
 
 The editor appears only inside an attached Session or a form that genuinely
 needs text. User messages always target the coordinator because the Managed
 Agents API does not accept a user message targeted directly at a child Thread.
+When a child transcript is open, the footer makes that routing explicit and
+`Esc` returns to the coordinator before leaving the Session.
 
 Arrow keys choose or scroll, `Enter` selects or sends, and `Esc` closes or goes
-back. Those three keys cover the main product. `Tab` moves between the Session
-composer and conversation inspection, while `Ctrl+P`, `Ctrl+G`, `Ctrl+S`, and
+back. Those three keys cover the main product. On wide terminals, `Tab` cycles
+through the composer, conversation, and Subagent workspace; `Enter` opens a
+child transcript, `Space` previews it without leaving the rail, and `x` opens
+an explicit child interrupt confirmation. `Ctrl+P`, `Ctrl+G`, `Ctrl+S`, and
 `Ctrl+N` remain optional accelerators for commands, Agents, Session search, and
-creation. `Ctrl+X` opens an explicit interrupt confirmation. `Ctrl+C` exits the
-terminal without stopping remote work.
+creation. `Ctrl+C` exits the terminal without stopping remote work.
 
 Every searchable picker and text editor uses a real terminal cursor from the
 Bubble Tea v2 components. This gives Chinese/Japanese/Korean IMEs a stable
 candidate-window anchor instead of a painted fake cursor.
 
-Wide terminals show a passive Session sidebar. It does not capture keyboard
-focus or change the observed Agent. Agent selection happens in one explicit
-picker. Below 120 columns or 30 rows, Mango switches to a compact single-column
-layout. Permission and external-tool gates use guarded decision dialogs so an
-in-flight keystroke cannot accidentally approve work.
+At 120×30 and above, the Subagent workspace is a dedicated right column. It
+absorbs the useful parts of a task footer—status, task, elapsed activity, tokens,
+and unread work—then adds Mango-specific Thread transcripts, undelegated roster
+members, child-owned approvals, and per-child interruption. Below that size it
+collapses into a one-line roster strip and the searchable Agent picker remains
+available. Permission and external-tool gates use guarded decision dialogs so
+an in-flight keystroke cannot accidentally approve work.
 
 Mango has a small motion language of its own: a privacy-safe rotating fruit
 signal while an Agent thinks, in-place streaming with a live caret, and a

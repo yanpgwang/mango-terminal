@@ -69,10 +69,10 @@ func TestTabNeverChangesSelectedAgent(t *testing.T) {
 	}
 }
 
-func TestAttachedSessionShowsBoardWithAgents(t *testing.T) {
+func TestAttachedSessionShowsConversationWithSubagentWorkspace(t *testing.T) {
 	model := New(demo.New(), "")
 	model.loading = false
-	model.width, model.height, model.screen = 140, 42, screenBoard
+	model.width, model.height, model.screen = 140, 42, screenChat
 	model.session = &mango.Session{ID: "sesn_1", Title: "Launch"}
 	parent := "sthr_primary"
 	model.threads = []mango.Thread{
@@ -81,33 +81,240 @@ func TestAttachedSessionShowsBoardWithAgents(t *testing.T) {
 	}
 	model.threadCursor = 0
 	model.resize()
-	view := ansi.Strip(model.renderBoard())
-	for _, want := range []string{"Launch", "Coordinator", "Sub-agents", "researcher"} {
+	model.renderChat()
+	view := ansi.Strip(model.renderWorkspace())
+	for _, want := range []string{"Launch", "Subagent workspace", "coordinator", "researcher", "main conversation"} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("board missing %q: %q", want, view)
+			t.Fatalf("workspace missing %q: %q", want, view)
 		}
 	}
 }
 
-func TestConnectionLogoUsesGradientWordmarkOnly(t *testing.T) {
+func TestSessionFocusCyclesThroughSubagentWorkspace(t *testing.T) {
+	model := New(demo.New(), "")
+	model.loading = false
+	model.width, model.height, model.screen = 140, 42, screenChat
+	parent := "sthr_primary"
+	model.threads = []mango.Thread{{ID: parent}, {ID: "sthr_child", ParentThreadID: &parent}}
+	model.threadCursor = 0
+	model.resize()
+
+	updated, _ := model.updateChat(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	model = updated.(Model)
+	if model.focus != focusChat {
+		t.Fatalf("first tab focus=%v, want conversation", model.focus)
+	}
+	updated, _ = model.updateChat(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	model = updated.(Model)
+	if model.focus != focusAgents {
+		t.Fatalf("second tab focus=%v, want subagent workspace", model.focus)
+	}
+	updated, _ = model.updateChat(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	model = updated.(Model)
+	if model.focus != focusEditor || !model.editor.Focused() {
+		t.Fatalf("third tab focus=%v editor=%v", model.focus, model.editor.Focused())
+	}
+}
+
+func TestSubagentWorkspacePreviewsAndOpensChildTranscript(t *testing.T) {
+	model := New(demo.New(), "")
+	model.loading = false
+	model.width, model.height, model.screen = 140, 42, screenChat
+	parent := "sthr_primary"
+	model.threads = []mango.Thread{{ID: parent}, {ID: "sthr_child", ParentThreadID: &parent}}
+	model.threadCursor, model.railCursor, model.focus = 0, 1, focusAgents
+	model.resize()
+
+	updated, _ := model.updateChat(tea.KeyPressMsg(tea.Key{Code: tea.KeySpace}))
+	model = updated.(Model)
+	if model.currentThreadID() != "sthr_child" || model.focus != focusAgents {
+		t.Fatalf("preview thread=%q focus=%v", model.currentThreadID(), model.focus)
+	}
+	updated, _ = model.updateChat(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	if model.currentThreadID() != "sthr_child" || model.focus != focusChat {
+		t.Fatalf("open thread=%q focus=%v", model.currentThreadID(), model.focus)
+	}
+	updated, _ = model.updateChat(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	model = updated.(Model)
+	if model.currentThreadID() != parent || model.focus != focusEditor || model.screen != screenChat {
+		t.Fatalf("back thread=%q focus=%v screen=%v", model.currentThreadID(), model.focus, model.screen)
+	}
+}
+
+func TestSubagentWorkspaceInterruptTargetsSelectedChild(t *testing.T) {
+	model := New(demo.New(), "")
+	model.loading = false
+	model.width, model.height, model.screen = 140, 42, screenChat
+	parent := "sthr_primary"
+	model.threads = []mango.Thread{{ID: parent}, {ID: "sthr_child", ParentThreadID: &parent}}
+	model.threadCursor, model.railCursor, model.focus = 0, 1, focusAgents
+	model.resize()
+
+	updated, _ := model.updateChat(tea.KeyPressMsg(tea.Key{Code: 'x'}))
+	model = updated.(Model)
+	if model.dialog != dialogInterrupt || model.currentThreadID() != "sthr_child" {
+		t.Fatalf("dialog=%v target=%q", model.dialog, model.currentThreadID())
+	}
+}
+
+func TestSendingFromChildViewReturnsToCoordinator(t *testing.T) {
+	model := New(demo.New(), "")
+	model.loading = false
+	model.width, model.height, model.screen = 140, 42, screenChat
+	parent := "sthr_primary"
+	model.session = &mango.Session{ID: "sesn_1"}
+	model.threads = []mango.Thread{{ID: parent}, {ID: "sthr_child", ParentThreadID: &parent}}
+	model.threadCursor, model.railCursor = 1, 1
+	model.editor.SetValue("follow up with the reviewer")
+	model.resize()
+
+	updated, command := model.updateChat(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	if command == nil || model.currentThreadID() != parent || model.previews[parent] == nil || model.previews["sthr_child"] != nil {
+		t.Fatalf("command=%v thread=%q previews=%#v", command, model.currentThreadID(), model.previews)
+	}
+}
+
+func TestCompactSessionCollapsesWorkspaceIntoAgentStrip(t *testing.T) {
+	model := New(demo.New(), "")
+	model.loading = false
+	model.width, model.height, model.screen = 100, 32, screenChat
+	parent := "sthr_primary"
+	model.session = &mango.Session{ID: "sesn_1", Title: "Compact review"}
+	model.threads = []mango.Thread{
+		{ID: parent, Agent: mango.Agent{Name: "coordinator"}},
+		{ID: "sthr_child", ParentThreadID: &parent, Agent: mango.Agent{Name: "researcher"}},
+	}
+	model.resize()
+	model.renderChat()
+	view := ansi.Strip(model.renderWorkspace())
+	if !strings.Contains(view, "Agents") || !strings.Contains(view, "researcher") || strings.Contains(view, "Subagent workspace") {
+		t.Fatalf("compact workspace = %q", view)
+	}
+}
+
+func TestWideSessionCursorAndLayoutStayInsideLeftConversation(t *testing.T) {
+	model := New(demo.New(), "")
+	model.loading = false
+	model.width, model.height, model.screen = 140, 42, screenChat
+	model.session = &mango.Session{ID: "sesn_1", Title: "Layout"}
+	parent := "sthr_primary"
+	model.threads = []mango.Thread{{ID: parent}, {ID: "sthr_child", ParentThreadID: &parent}}
+	model.editor.SetValue("中文")
+	model.resize()
+	model.renderChat()
+	view := model.View()
+	if got := lipgloss.Width(view.Content); got > model.width {
+		t.Fatalf("workspace width=%d terminal=%d", got, model.width)
+	}
+	if got := lipgloss.Height(view.Content); got > model.height {
+		t.Fatalf("workspace height=%d terminal=%d", got, model.height)
+	}
+	if view.Cursor == nil || view.Cursor.X >= model.workspaceMainWidth() || view.Cursor.Y >= model.height {
+		t.Fatalf("cursor=%#v mainWidth=%d terminalHeight=%d", view.Cursor, model.workspaceMainWidth(), model.height)
+	}
+}
+
+func TestSubagentWorkspaceShowsGhostRosterAndPendingAction(t *testing.T) {
+	model := New(demo.New(), "")
+	model.width, model.height, model.screen = 140, 42, screenChat
+	model.session = &mango.Session{ID: "sesn_1"}
+	model.session.Agent.ID = "agent_main"
+	model.session.Agent.Multiagent = &mango.Multiagent{Agents: []mango.AgentReference{
+		{ID: "agent_researcher", Name: "researcher"},
+		{ID: "agent_writer", Name: "writer"},
+	}}
+	parent := "sthr_primary"
+	model.threads = []mango.Thread{
+		{ID: parent, Agent: mango.Agent{ID: "agent_main", Name: "coordinator"}},
+		{ID: "sthr_child", ParentThreadID: &parent, Agent: mango.Agent{ID: "agent_researcher", Name: "researcher"}},
+	}
+	model.pending = []mango.Action{{ID: "sevt_action", ThreadID: "sthr_child", Name: "bash"}}
+	model.resize()
+	rail := ansi.Strip(model.renderAgentWorkspace(model.workspaceRailWidth(), 38))
+	for _, want := range []string{"1 live / 2 roster", "writer", "not delegated yet", "Needs your input", "bash", "researcher"} {
+		if !strings.Contains(rail, want) {
+			t.Fatalf("rail missing %q: %q", want, rail)
+		}
+	}
+}
+
+func TestSubagentWorkspaceKeepsSelectedAgentVisibleInLongRoster(t *testing.T) {
+	model := New(demo.New(), "")
+	model.width, model.height, model.screen = 140, 30, screenChat
+	model.session = &mango.Session{ID: "sesn_1"}
+	model.threads = []mango.Thread{{ID: "sthr_primary", Agent: mango.Agent{Name: "coordinator"}}}
+	parent := model.threads[0].ID
+	for index := 1; index <= 9; index++ {
+		model.threads = append(model.threads, mango.Thread{
+			ID: fmt.Sprintf("sthr_%d", index), ParentThreadID: &parent,
+			Agent: mango.Agent{Name: fmt.Sprintf("agent-%d", index)},
+		})
+	}
+	model.focus, model.railCursor = focusAgents, 9
+	model.resize()
+	rail := ansi.Strip(model.renderAgentWorkspace(model.workspaceRailWidth(), 26))
+	if !strings.Contains(rail, "agent-9") || !strings.Contains(rail, "earlier") {
+		t.Fatalf("selected long-roster agent not visible: %q", rail)
+	}
+}
+
+func TestCoordinatorActivityIgnoresChildActionCrosspost(t *testing.T) {
+	model := New(demo.New(), "")
+	parent := mango.Thread{ID: "sthr_primary", Agent: mango.Agent{Name: "coordinator"}}
+	model.events[parent.ID] = []mango.Event{
+		{"id": "sevt_report", "type": "agent.thread_message_received", "from_agent_name": "researcher", "content": "cohort report ready"},
+		{"id": "sevt_child_tool", "type": "agent.tool_use", "name": "bash", "session_thread_id": "sthr_child"},
+	}
+	activity, _ := model.agentActivity(parent)
+	if !strings.Contains(activity, "cohort report ready") || strings.Contains(activity, "bash") {
+		t.Fatalf("coordinator activity=%q", activity)
+	}
+}
+
+func TestRunningAgentActivitySupersedesHistoricalReport(t *testing.T) {
+	model := New(demo.New(), "")
+	thread := mango.Thread{ID: "sthr_child", Status: "running", Agent: mango.Agent{Name: "researcher"}}
+	model.events[thread.ID] = []mango.Event{
+		{"id": "sevt_report", "type": "agent.thread_message_received", "from_agent_name": "researcher", "content": "previous report"},
+	}
+	activity, _ := model.agentActivity(thread)
+	if activity != "running" {
+		t.Fatalf("activity=%q, want live Thread status", activity)
+	}
+}
+
+func TestSubagentCountDeduplicatesConfiguredRoles(t *testing.T) {
+	session := mango.Session{Agent: mango.Agent{ID: "agent_main"}}
+	session.Agent.Multiagent = &mango.Multiagent{Agents: []mango.AgentReference{
+		{ID: "agent_main", Name: "coordinator"},
+		{ID: "agent_researcher", Name: "researcher"},
+		{ID: "agent_researcher", Name: "researcher"},
+		{ID: "agent_reviewer", Name: "researcher"},
+		{ID: "agent_writer", Name: "writer"},
+	}}
+	if count := subagentCount(session); count != 2 {
+		t.Fatalf("subagentCount=%d, want 2 unique configured roles", count)
+	}
+}
+
+func TestConnectionLogoUsesRestrainedWelcomeScene(t *testing.T) {
 	model := New(demo.New(), "")
 	logo := model.brandLogo(false)
 	plain := ansi.Strip(logo)
 	if logo == plain {
 		t.Fatal("connection logo has no ANSI color treatment")
 	}
-	if !strings.Contains(plain, "███  ███") || !strings.Contains(plain, " ▀████▀") ||
-		!strings.Contains(plain, "powered by Bubble Tea") {
-		t.Fatalf("connection logo lost the Mango wordmark: %q", plain)
+	if !strings.Contains(plain, "Welcome to Mango") || !strings.Contains(plain, "managed agents, one window") ||
+		!strings.Contains(plain, "████████") {
+		t.Fatalf("connection logo lost the Mango welcome scene: %q", plain)
 	}
-	if strings.ContainsAny(plain, "◆●╱╲") {
-		t.Fatalf("connection logo still contains a graphical mark: %q", plain)
+	if width := lipgloss.Width(logo); width > 58 {
+		t.Fatalf("connection logo width=%d, want <=58", width)
 	}
-	if width := lipgloss.Width(logo); width > 52 {
-		t.Fatalf("connection logo width=%d, want <=52", width)
-	}
-	if height := lipgloss.Height(logo); height != 8 {
-		t.Fatalf("connection logo height=%d, want 8", height)
+	if height := lipgloss.Height(logo); height != 10 {
+		t.Fatalf("connection logo height=%d, want 10", height)
 	}
 }
 
@@ -121,8 +328,8 @@ func TestConnectionLogoFitsMinimumSupportedTerminal(t *testing.T) {
 	if height := lipgloss.Height(view); height > model.height {
 		t.Fatalf("connection view height=%d terminal=%d", height, model.height)
 	}
-	if plain := ansi.Strip(view); !strings.Contains(plain, "Connect") || !strings.Contains(plain, "powered by Bubble Tea") {
-		t.Fatalf("connection view lost controls or wordmark: %q", plain)
+	if plain := ansi.Strip(view); !strings.Contains(plain, "Connect") || !strings.Contains(plain, "Welcome to Mango") {
+		t.Fatalf("connection view lost controls or welcome: %q", plain)
 	}
 }
 
@@ -474,7 +681,7 @@ func TestNewSessionWizardCreatesAndAttaches(t *testing.T) {
 	}
 	updated, _ = model.Update(attach())
 	model = updated.(Model)
-	if model.screen != screenBoard || model.session == nil || model.session.Title != "Created in TUI" {
+	if model.screen != screenChat || model.session == nil || model.session.Title != "Created in TUI" {
 		t.Fatalf("screen=%v session=%#v err=%v", model.screen, model.session, model.err)
 	}
 	if got := model.events[model.primaryThreadID()]; len(got) != 1 || got[0].Type() != "user.message" {
