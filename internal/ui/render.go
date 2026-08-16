@@ -948,6 +948,12 @@ func (m Model) renderDialog() string {
 		)
 	}
 	box := m.dialogTitle(title) + "\n" + m.dialogRule(innerWidth) + "\n\n" + content
+	if m.dialog == dialogQuit {
+		// Quitting stays calm: a solid title and rule instead of the branded
+		// gradient used elsewhere.
+		box = m.theme.title.Render(title) + "\n" +
+			m.theme.dim.Render(strings.Repeat("─", max(0, innerWidth))) + "\n\n" + content
+	}
 	return lipgloss.NewStyle().Width(width).Padding(1, 2).Background(m.theme.panel).
 		Border(lipgloss.RoundedBorder()).BorderForeground(m.theme.border).Render(box)
 }

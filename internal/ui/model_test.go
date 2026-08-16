@@ -414,22 +414,26 @@ func TestSubagentCountDeduplicatesConfiguredRoles(t *testing.T) {
 	}
 }
 
-func TestConnectionLogoUsesRestrainedWelcomeScene(t *testing.T) {
+func TestConnectionLogoUsesPixelCloudWelcomeScene(t *testing.T) {
 	model := New(demo.New(), "")
 	logo := model.brandLogo(false)
 	plain := ansi.Strip(logo)
 	if logo == plain {
 		t.Fatal("connection logo has no ANSI color treatment")
 	}
-	if !strings.Contains(plain, "Welcome to Mango") || !strings.Contains(plain, "managed agents, one window") ||
-		!strings.Contains(plain, "•ᴗ•") || strings.Contains(plain, "████") {
-		t.Fatalf("connection logo lost the Mango welcome scene: %q", plain)
+	if !strings.Contains(plain, "Welcome to Mango") || !strings.Contains(plain, "managed agents, one window") {
+		t.Fatalf("connection logo lost the Mango welcome copy: %q", plain)
+	}
+	// The welcome scene is now a chunky pixel cloud, so it must carry block
+	// glyphs and a face rather than the old thin line-art clouds.
+	if !strings.Contains(plain, "█") || !strings.Contains(plain, "●") {
+		t.Fatalf("connection logo is not a pixel cloud: %q", plain)
 	}
 	if width := lipgloss.Width(logo); width > 58 {
 		t.Fatalf("connection logo width=%d, want <=58", width)
 	}
-	if height := lipgloss.Height(logo); height != 10 {
-		t.Fatalf("connection logo height=%d, want 10", height)
+	if height := lipgloss.Height(logo); height != 7 {
+		t.Fatalf("connection logo height=%d, want 7", height)
 	}
 }
 
@@ -443,17 +447,17 @@ func TestConnectionLogoFitsMinimumSupportedTerminal(t *testing.T) {
 	if height := lipgloss.Height(view); height > model.height {
 		t.Fatalf("connection view height=%d terminal=%d", height, model.height)
 	}
-	if plain := ansi.Strip(view); !strings.Contains(plain, "Connect") || !strings.Contains(plain, "Welcome to Mango") {
+	if plain := ansi.Strip(view); !strings.Contains(plain, "Mango Cloud") || !strings.Contains(plain, "Welcome to Mango") {
 		t.Fatalf("connection view lost controls or welcome: %q", plain)
 	}
 }
 
-func TestEndpointPickerSelectsBeforeConnecting(t *testing.T) {
+func TestEndpointListConnectsOnHighlightedEnter(t *testing.T) {
 	selected := ""
 	model := NewWithOptions(demo.New(), "", Options{
 		Endpoint: "http://first.example.com",
 		Endpoints: []EndpointOption{
-			{URL: "http://first.example.com", Source: "saved"},
+			{URL: "http://first.example.com", Source: "configured"},
 			{URL: "https://second.example.com", Source: "configured"},
 		},
 		BackendForEndpoint: func(target string) (mango.Backend, error) {
@@ -461,26 +465,25 @@ func TestEndpointPickerSelectsBeforeConnecting(t *testing.T) {
 			return demo.New(), nil
 		},
 	})
+	// The endpoint list is always visible; the cursor starts on the configured
+	// endpoint. There is no separate Connect button — Enter connects the
+	// highlighted row directly, matching the Crush-style picker.
+	if model.connect.current().url != "http://first.example.com" {
+		t.Fatalf("initial highlight = %q", model.connect.current().url)
+	}
+	updated, _ := model.updateConnect(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	model = updated.(Model)
+	if model.connect.current().url != "https://second.example.com" {
+		t.Fatalf("after down highlight = %q", model.connect.current().url)
+	}
 	updated, command := model.updateConnect(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	model = updated.(Model)
-	if command != nil || !model.connect.pickerOpen {
-		t.Fatalf("enter on endpoint pickerOpen=%v command=%v", model.connect.pickerOpen, command)
-	}
-	updated, _ = model.updateConnect(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
-	model = updated.(Model)
-	updated, _ = model.updateConnect(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	model = updated.(Model)
-	if model.connect.pickerOpen || model.connect.selected != 1 || model.connect.focus != connectFocusButton {
-		t.Fatalf("selected=%d picker=%v focus=%v", model.connect.selected, model.connect.pickerOpen, model.connect.focus)
-	}
-	updated, command = model.updateConnect(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	model = updated.(Model)
 	if command == nil || !model.loading || selected != "https://second.example.com" {
 		t.Fatalf("command=%v loading=%v selected=%q", command, model.loading, selected)
 	}
 }
 
-func TestEndpointManualEntryNormalizesAndReturnsToConnect(t *testing.T) {
+func TestEndpointManualEntryNormalizesAndHighlights(t *testing.T) {
 	model := NewWithOptions(demo.New(), "", Options{
 		Endpoint:  "demo://local",
 		Endpoints: []EndpointOption{{URL: "demo://local", Label: "Local demo", Available: true, SkipProbe: true}},
@@ -496,8 +499,10 @@ func TestEndpointManualEntryNormalizesAndReturnsToConnect(t *testing.T) {
 	}
 	updated, _ = model.updateConnect(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	model = updated.(Model)
-	if model.connect.editing || model.connect.focus != connectFocusButton || model.connect.current().url != "http://localhost:9090" {
-		t.Fatalf("editing=%v focus=%v endpoint=%q", model.connect.editing, model.connect.focus, model.connect.current().url)
+	// After adding a manual endpoint the editor closes and the cursor lands on
+	// the freshly added endpoint, ready for a single Enter to connect.
+	if model.connect.editing || model.connect.current().url != "http://localhost:9090" {
+		t.Fatalf("editing=%v endpoint=%q", model.connect.editing, model.connect.current().url)
 	}
 }
 
@@ -523,7 +528,6 @@ func TestEndpointSaveFailureIsVisibleAfterConnecting(t *testing.T) {
 			return errors.New("read-only config")
 		},
 	})
-	model.connect.focus = connectFocusButton
 	updated, load := model.updateConnect(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	model = updated.(Model)
 	updated, save := model.Update(load())
@@ -538,7 +542,7 @@ func TestEndpointSaveFailureIsVisibleAfterConnecting(t *testing.T) {
 	}
 }
 
-func TestEndpointPickerAndEditorFitMinimumTerminal(t *testing.T) {
+func TestEndpointListAndEditorFitMinimumTerminal(t *testing.T) {
 	model := NewWithOptions(demo.New(), "", Options{
 		Endpoint: "http://127.0.0.1:8080",
 		Endpoints: []EndpointOption{
@@ -548,15 +552,9 @@ func TestEndpointPickerAndEditorFitMinimumTerminal(t *testing.T) {
 	})
 	model.width, model.height = 60, 20
 	model.resize()
-	model.connect.pickerOpen = true
-	for state, view := range map[string]string{
-		"picker": model.renderConnect(),
-	} {
-		if lipgloss.Width(view) > model.width || lipgloss.Height(view) > model.height {
-			t.Fatalf("%s is %dx%d in %dx%d", state, lipgloss.Width(view), lipgloss.Height(view), model.width, model.height)
-		}
+	if view := model.renderConnect(); lipgloss.Width(view) > model.width || lipgloss.Height(view) > model.height {
+		t.Fatalf("list is %dx%d in %dx%d", lipgloss.Width(view), lipgloss.Height(view), model.width, model.height)
 	}
-	model.connect.pickerOpen = false
 	model.connect.editing = true
 	model.connect.endpointInput.Focus()
 	model.connect.endpointInput.SetValue("https://a-very-long-endpoint-name-for-a-small-terminal.example.com")
@@ -979,8 +977,6 @@ func TestConnectThenHomeStartsWithVisibleCreateChoice(t *testing.T) {
 	if model.screen != screenConnect || model.loading {
 		t.Fatalf("initial screen=%v loading=%v", model.screen, model.loading)
 	}
-	updated, _ := model.updateConnect(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
-	model = updated.(Model)
 	updated, command := model.updateConnect(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	model = updated.(Model)
 	if command == nil || !model.loading {
@@ -1041,6 +1037,30 @@ func TestNotificationsAreDisabledUnlessExplicitlyEnabled(t *testing.T) {
 		"id": "sevt_idle", "type": "session.status_idle",
 	}}); command != nil {
 		t.Fatal("default notification mode must not emit terminal escape sequences")
+	}
+}
+
+func TestQuitDialogTitleHasNoGradient(t *testing.T) {
+	model := New(demo.New(), "")
+	model.width, model.height, model.screen = 100, 30, screenChat
+	model.resize()
+	model.openQuitDialog()
+	modal := model.renderDialog()
+	titleLine := ""
+	for _, line := range strings.Split(modal, "\n") {
+		if strings.Contains(ansi.Strip(line), "Quit Mango?") {
+			titleLine = line
+			break
+		}
+	}
+	if titleLine == "" {
+		t.Fatal("quit dialog has no title line")
+	}
+	// The brand wordmark blends the fruit (#FF9D18) and link (#3157D5) colors
+	// across the title. Quitting should feel calm, so neither gradient endpoint
+	// should appear on the title line.
+	if strings.Contains(titleLine, "255;157;24") || strings.Contains(titleLine, "49;87;213") {
+		t.Fatalf("quit title still uses the fruit→link gradient: %q", titleLine)
 	}
 }
 

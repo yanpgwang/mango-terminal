@@ -9,13 +9,6 @@ import (
 	"github.com/yanpgwang/mango-terminal/internal/endpoint"
 )
 
-type connectFocus int
-
-const (
-	connectFocusEndpoint connectFocus = iota
-	connectFocusButton
-)
-
 type endpointAvailability int
 
 const (
@@ -34,10 +27,8 @@ type endpointChoice struct {
 }
 
 type connectState struct {
-	focus           connectFocus
-	selected        int
-	pickerCursor    int
-	pickerOpen      bool
+	cursor          int    // position in the grouped navigable order; len(navOrder) is the manual-entry row
+	configured      string // url of the initially configured endpoint, marked in its group header
 	editing         bool
 	endpoints       []endpointChoice
 	endpointInput   textinput.Model
@@ -65,10 +56,11 @@ func newConnectState(options Options, t theme) connectState {
 	input.SetStyles(styles)
 	input.Blur()
 
-	state := connectState{focus: connectFocusEndpoint, endpointInput: input}
+	state := connectState{endpointInput: input}
 	for _, option := range options.Endpoints {
 		state.addEndpoint(option)
 	}
+	sliceIndex := 0
 	initial := strings.TrimSpace(options.Endpoint)
 	if initial != "" {
 		index := state.indexOf(initial)
@@ -76,13 +68,14 @@ func newConnectState(options Options, t theme) connectState {
 			state.endpoints = append([]endpointChoice{{url: initial, label: initial, source: "configured"}}, state.endpoints...)
 			index = 0
 		}
-		state.selected, state.pickerCursor = index, index
+		sliceIndex = index
 	}
 	if len(state.endpoints) == 0 {
 		state.endpoints = append(state.endpoints, endpointChoice{url: "Mango Cloud", label: "Mango Cloud", source: "configured", skipProbe: true})
 	}
-	state.selected = clamp(state.selected, 0, len(state.endpoints)-1)
-	state.pickerCursor = state.selected
+	sliceIndex = clamp(sliceIndex, 0, len(state.endpoints)-1)
+	state.configured = state.endpoints[sliceIndex].url
+	state.cursor = displayPos(state.navOrder(), sliceIndex)
 	return state
 }
 
@@ -129,11 +122,62 @@ func (c connectState) indexOf(target string) int {
 	return -1
 }
 
+// Endpoints are shown grouped by origin. The buckets are fixed so the list
+// order stays stable as endpoints are probed or added.
+var endpointBuckets = []struct {
+	key   string
+	label string
+}{
+	{"configured", "Configured"},
+	{"manual", "Manual"},
+	{"demo", "Demo"},
+}
+
+func endpointBucket(option endpointChoice) string {
+	switch {
+	case strings.HasPrefix(option.url, "demo://"):
+		return "demo"
+	case option.source == "manual":
+		return "manual"
+	default:
+		return "configured"
+	}
+}
+
+// navOrder lists endpoint slice indices in the grouped display order. The
+// cursor indexes into this order, so navigation and rendering agree on which
+// row is highlighted.
+func (c connectState) navOrder() []int {
+	order := make([]int, 0, len(c.endpoints))
+	for _, bucket := range endpointBuckets {
+		for index, option := range c.endpoints {
+			if endpointBucket(option) == bucket.key {
+				order = append(order, index)
+			}
+		}
+	}
+	return order
+}
+
+func (c connectState) onManualRow() bool {
+	return c.cursor >= len(c.navOrder())
+}
+
+func displayPos(order []int, sliceIndex int) int {
+	for pos, index := range order {
+		if index == sliceIndex {
+			return pos
+		}
+	}
+	return 0
+}
+
 func (c connectState) current() endpointChoice {
-	if len(c.endpoints) == 0 {
+	order := c.navOrder()
+	if len(order) == 0 {
 		return endpointChoice{}
 	}
-	return c.endpoints[clamp(c.selected, 0, len(c.endpoints)-1)]
+	return c.endpoints[order[clamp(c.cursor, 0, len(order)-1)]]
 }
 
 func (m Model) endpointProbeCommands() []tea.Cmd {
@@ -201,9 +245,8 @@ func (m Model) updateConnectKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if index < 0 {
 				index = m.connect.addEndpoint(EndpointOption{URL: target, Source: "manual"})
 			}
-			m.connect.selected, m.connect.pickerCursor = index, index
-			m.connect.editing, m.connect.pickerOpen = false, false
-			m.connect.focus = connectFocusButton
+			m.connect.cursor = displayPos(m.connect.navOrder(), index)
+			m.connect.editing = false
 			m.connect.validationError = ""
 			m.connect.endpointInput.Blur()
 			return m, m.probeEndpoint(target)
@@ -214,60 +257,19 @@ func (m Model) updateConnectKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, command
 	}
 
-	if m.connect.pickerOpen {
-		count := len(m.connect.endpoints) + 1 // final row is manual entry
-		switch key.String() {
-		case "esc":
-			m.connect.pickerOpen = false
-			m.connect.pickerCursor = m.connect.selected
-			return m, nil
-		case "up", "k":
-			m.connect.pickerCursor = wrap(m.connect.pickerCursor-1, count)
-			return m, nil
-		case "down", "j":
-			m.connect.pickerCursor = wrap(m.connect.pickerCursor+1, count)
-			return m, nil
-		case "e":
-			return m.beginEndpointEdit()
-		case "enter":
-			if m.connect.pickerCursor == len(m.connect.endpoints) {
-				return m.beginEndpointEdit()
-			}
-			m.connect.selected = m.connect.pickerCursor
-			m.connect.pickerOpen = false
-			m.connect.focus = connectFocusButton
-			return m, nil
-		}
-		return m, nil
-	}
-
+	count := len(m.connect.navOrder()) + 1 // final row is manual entry
 	switch key.String() {
-	case "up", "down", "tab", "shift+tab":
-		if m.connect.focus == connectFocusEndpoint {
-			m.connect.focus = connectFocusButton
-		} else {
-			m.connect.focus = connectFocusEndpoint
-		}
+	case "up", "k":
+		m.connect.cursor = wrap(m.connect.cursor-1, count)
 		return m, nil
-	case "left", "h":
-		if m.connect.focus == connectFocusEndpoint && len(m.connect.endpoints) > 1 {
-			m.connect.selected = wrap(m.connect.selected-1, len(m.connect.endpoints))
-			m.connect.pickerCursor = m.connect.selected
-		}
-		return m, nil
-	case "right", "l":
-		if m.connect.focus == connectFocusEndpoint && len(m.connect.endpoints) > 1 {
-			m.connect.selected = wrap(m.connect.selected+1, len(m.connect.endpoints))
-			m.connect.pickerCursor = m.connect.selected
-		}
+	case "down", "j":
+		m.connect.cursor = wrap(m.connect.cursor+1, count)
 		return m, nil
 	case "e":
 		return m.beginEndpointEdit()
 	case "enter":
-		if m.connect.focus == connectFocusEndpoint {
-			m.connect.pickerOpen = true
-			m.connect.pickerCursor = m.connect.selected
-			return m, nil
+		if m.connect.onManualRow() {
+			return m.beginEndpointEdit()
 		}
 		return m.connectSelectedEndpoint()
 	case "ctrl+p":
@@ -294,7 +296,7 @@ func (m Model) beginEndpointEdit() (tea.Model, tea.Cmd) {
 	m.connect.editing = true
 	m.connect.validationError = ""
 	current := m.connect.current().url
-	if strings.HasPrefix(current, "http://") || strings.HasPrefix(current, "https://") {
+	if !m.connect.onManualRow() && (strings.HasPrefix(current, "http://") || strings.HasPrefix(current, "https://")) {
 		m.connect.endpointInput.SetValue(current)
 	} else {
 		m.connect.endpointInput.Reset()

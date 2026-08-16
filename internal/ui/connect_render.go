@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -12,172 +11,171 @@ type connectLayout struct {
 	inputX, inputY int
 }
 
+// selectedRowStyle paints the highlighted endpoint as a full-width accent bar
+// with dark text, matching the Crush-style picker the connect screen mirrors.
+func (m Model) selectedRowStyle(width int) lipgloss.Style {
+	return lipgloss.NewStyle().
+		Width(width).
+		Foreground(lipgloss.Color("#11150F")).
+		Background(m.theme.accent)
+}
+
+// buildConnectLayout centers a borderless welcome + endpoint list in the whole
+// terminal. It also reports where the manual-entry editor's caret lands so the
+// real terminal cursor (and any IME window) can follow it.
 func (m Model) buildConnectLayout() connectLayout {
 	width, height := max(1, m.width), max(1, m.height)
-	frameWidth, frameHeight, contentWidth, compact := connectDimensions(width, height)
+	_, _, contentWidth, compact := connectDimensions(width, height)
 
 	welcome := m.welcomeBlock(contentWidth, compact)
-	card, inputCardX, inputCardY := m.renderConnectCard(contentWidth, compact)
-	footer := m.theme.dim.Render(truncate(m.connectFooter(), frameWidth))
-	inner := strings.Join([]string{welcome, "", card, "", footer}, "\n")
-	if lipgloss.Height(inner) > frameHeight {
+	body, inputX, inputY := m.renderConnectBody(contentWidth, compact)
+	footer := m.theme.dim.Render(truncate(m.connectFooter(), contentWidth))
+
+	parts := []string{welcome, "", body, "", footer}
+	spacer := 1
+	if lipgloss.Height(strings.Join(parts, "\n")) > height {
 		welcome = m.welcomeBlock(contentWidth, true)
-		inner = strings.Join([]string{welcome, card, footer}, "\n")
+		parts = []string{welcome, body, footer}
+		spacer = 0
 	}
-
+	inner := strings.Join(parts, "\n")
 	innerWidth, innerHeight := lipgloss.Width(inner), lipgloss.Height(inner)
-	innerLeft := max(0, (frameWidth-innerWidth)/2)
-	innerTop := max(0, (frameHeight-innerHeight)/2)
-	frameBody := lipgloss.Place(frameWidth, frameHeight, lipgloss.Center, lipgloss.Center, inner)
-	frame := lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("#354138")).
-		Render(frameBody)
-	frameTotalWidth, frameTotalHeight := lipgloss.Width(frame), lipgloss.Height(frame)
-	frameLeft := max(0, (width-frameTotalWidth)/2)
-	frameTop := max(0, (height-frameTotalHeight)/2)
-	view := lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, frame)
+	innerLeft := max(0, (width-innerWidth)/2)
+	innerTop := max(0, (height-innerHeight)/2)
+	view := lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, inner)
 
-	cardTop := lipgloss.Height(welcome) + 1
-	if lipgloss.Height(strings.Join([]string{welcome, "", card, "", footer}, "\n")) > frameHeight {
-		cardTop = lipgloss.Height(welcome)
-	}
-	cardLeft := max(0, (innerWidth-lipgloss.Width(card))/2)
+	bodyTop := lipgloss.Height(welcome) + spacer
+	bodyLeft := max(0, (innerWidth-lipgloss.Width(body))/2)
 	return connectLayout{
 		view:   view,
-		inputX: frameLeft + 1 + innerLeft + cardLeft + inputCardX,
-		inputY: frameTop + 1 + innerTop + cardTop + inputCardY,
+		inputX: innerLeft + bodyLeft + inputX,
+		inputY: innerTop + bodyTop + inputY,
 	}
 }
 
-func (m Model) renderConnectCard(width int, compact bool) (string, int, int) {
-	innerWidth, horizontalPadding, verticalPadding := connectCardMetrics(width, compact)
-	lines := []string{m.theme.title.Render("Connect to Mango Cloud")}
-	if !compact {
-		lines = append(lines, "")
-	}
+// renderConnectBody returns the endpoint list (or the manual-entry editor) as a
+// block exactly contentWidth wide, plus the editor caret offset inside it.
+func (m Model) renderConnectBody(width int, compact bool) (string, int, int) {
+	lines := []string{}
 
-	inputLine := -1
+	inputX, inputY := 0, 0
 	if m.connect.editing {
-		lines = append(lines, m.theme.active.Render("Endpoint · enter an address"))
-		inputLine = len(lines)
-		input := m.connect.endpointInput
-		if input.Width() != innerWidth {
-			input.SetWidth(innerWidth)
+		lines = append(lines, m.theme.dim.Render("Endpoint · enter an address"))
+		hpad := 2
+		if compact {
+			hpad = 1
 		}
-		lines = append(lines, input.View())
+		cardInner := max(20, width-2-2*hpad)
+		input := m.connect.endpointInput
+		if input.Width() != cardInner {
+			input.SetWidth(cardInner)
+		}
+		inputX, inputY = hpad, len(lines)
+		lines = append(lines, strings.Repeat(" ", hpad)+input.View())
 		if m.connect.validationError != "" {
-			lines = append(lines, m.theme.danger.Render(trimOneLine(m.connect.validationError, innerWidth)))
+			lines = append(lines, m.theme.danger.Render(trimOneLine(m.connect.validationError, width)))
 		} else {
 			lines = append(lines, m.theme.dim.Render("http:// and https:// are supported"))
 		}
-	} else if m.connect.pickerOpen {
-		lines = append(lines, m.theme.active.Render("Endpoint · choose one"))
-		lines = append(lines, m.renderEndpointPicker(innerWidth)...)
 	} else {
-		label := "  Endpoint"
-		if m.connect.focus == connectFocusEndpoint {
-			label = "› Endpoint"
-		}
-		selected := m.connect.current()
-		value := first(selected.label, selected.url, "Mango Cloud")
-		arrows := "  "
-		if len(m.connect.endpoints) > 1 {
-			arrows = "‹ ›"
-		}
-		valueWidth := max(8, innerWidth-lipgloss.Width(label)-lipgloss.Width(arrows)-4)
-		valueStyle := m.theme.title
-		if m.connect.focus == connectFocusEndpoint {
-			valueStyle = m.theme.active
-		}
-		row := label + "  " + valueStyle.Render(truncate(value, valueWidth)) + "  " + m.theme.dim.Render(arrows)
-		lines = append(lines, row)
-		lines = append(lines, m.theme.dim.Render(truncate(m.endpointSummary(selected), innerWidth)))
+		lines = append(lines, m.renderEndpointList(width)...)
 	}
 
-	if !compact || (!m.connect.pickerOpen && !m.connect.editing) {
-		lines = append(lines, "")
+	if m.err != nil {
+		lines = append(lines, m.theme.danger.Render(trimOneLine(m.err.Error(), width)))
 	}
 	if m.loading {
-		lines = append(lines, lipgloss.PlaceHorizontal(innerWidth, lipgloss.Center,
+		lines = append(lines, lipgloss.PlaceHorizontal(width, lipgloss.Center,
 			m.activity(first(m.loadingLabel, "Connecting to Mango Cloud"))))
-	} else {
-		button := "Connect"
-		buttonStyle := lipgloss.NewStyle().
-			Width(innerWidth).
-			Align(lipgloss.Center).
-			Foreground(lipgloss.Color("#11150F")).
-			Background(m.theme.accent)
-		if m.connect.focus == connectFocusButton && !m.connect.pickerOpen && !m.connect.editing {
-			buttonStyle = buttonStyle.Bold(true)
-		}
-		lines = append(lines, buttonStyle.Render(button))
 	}
-	if m.err != nil {
-		lines = append(lines, m.theme.danger.Render(trimOneLine(m.err.Error(), innerWidth)))
-	} else if !compact {
-		note := "The selected endpoint is saved after a successful connection."
-		if strings.HasPrefix(m.connect.current().url, "demo://") {
-			note = "The local demo runs entirely on this device."
-		}
-		lines = append(lines, m.theme.dim.Render(note))
-	}
-
-	card := lipgloss.NewStyle().
-		Width(innerWidth).
-		Padding(verticalPadding, horizontalPadding).
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("#3B463D")).
-		Render(strings.Join(lines, "\n"))
-	inputX := 1 + horizontalPadding
-	inputY := 1 + verticalPadding + inputLine
-	return card, inputX, inputY
+	return strings.Join(lines, "\n"), inputX, inputY
 }
 
-func (m Model) renderEndpointPicker(width int) []string {
-	count := len(m.connect.endpoints) + 1
-	visible := min(4, count)
-	start, end := visibleRange(count, m.connect.pickerCursor, visible)
-	rows := make([]string, 0, end-start)
-	for index := start; index < end; index++ {
-		marker := "  "
-		style := lipgloss.NewStyle().Foreground(m.theme.text)
-		if index == m.connect.pickerCursor {
-			marker, style = "› ", m.theme.active
-		}
-		if index == len(m.connect.endpoints) {
-			rows = append(rows, marker+style.Render("Enter another endpoint…"))
-			continue
-		}
+func (m Model) renderEndpointList(width int) []string {
+	order := m.connect.navOrder()
+	configuredBucket := ""
+	if index := m.connect.indexOf(m.connect.configured); index >= 0 {
+		configuredBucket = endpointBucket(m.connect.endpoints[index])
+	}
+	lines := make([]string, 0, len(order)+4)
+	previous := ""
+	for pos, index := range order {
 		option := m.connect.endpoints[index]
-		status := m.endpointStatus(option)
-		label := truncate(first(option.label, option.url), max(8, width-2-lipgloss.Width(status)-5))
-		rows = append(rows, marker+style.Render(label)+m.theme.dim.Render("  ·  ")+status)
+		bucket := endpointBucket(option)
+		if bucket != previous {
+			if previous != "" {
+				lines = append(lines, "")
+			}
+			lines = append(lines, m.endpointGroupHeader(bucket, bucket == configuredBucket, width))
+			previous = bucket
+		}
+		lines = append(lines, m.endpointRow(option, pos == m.connect.cursor, width))
 	}
-	return rows
+	lines = append(lines, "")
+	lines = append(lines, m.endpointManualRow(m.connect.onManualRow(), width))
+	return lines
 }
 
-func (m Model) endpointSummary(option endpointChoice) string {
-	parts := make([]string, 0, 2)
-	if option.source != "" {
-		parts = append(parts, option.source)
+func (m Model) endpointGroupHeader(bucket string, marked bool, width int) string {
+	left := m.theme.dim.Render(endpointBucketLabel(bucket)) + " "
+	mark := ""
+	if marked {
+		mark = " " + m.theme.success.Render("✓")
 	}
+	fill := max(0, width-lipgloss.Width(left)-lipgloss.Width(mark))
+	return left + m.theme.dim.Render(strings.Repeat("─", fill)) + mark
+}
+
+func (m Model) endpointRow(option endpointChoice, selected bool, width int) string {
+	label := first(option.label, option.url)
+	if selected {
+		status := endpointStatusPlain(option)
+		labelWidth := max(4, width-4-lipgloss.Width(status))
+		left := "▌ " + truncate(label, labelWidth)
+		gap := max(1, width-lipgloss.Width(left)-lipgloss.Width(status)-1)
+		content := left + strings.Repeat(" ", gap) + status + " "
+		return m.selectedRowStyle(width).Render(content)
+	}
+	status := m.endpointStatus(option)
+	labelWidth := max(4, width-4-lipgloss.Width(status))
+	left := "  " + lipgloss.NewStyle().Foreground(m.theme.text).Render(truncate(label, labelWidth))
+	gap := max(1, width-lipgloss.Width(left)-lipgloss.Width(status)-1)
+	return left + strings.Repeat(" ", gap) + status + " "
+}
+
+func (m Model) endpointManualRow(selected bool, width int) string {
+	label := "Enter another endpoint…"
+	if selected {
+		return m.selectedRowStyle(width).Render("▌ " + label)
+	}
+	return "  " + m.theme.dim.Render(label)
+}
+
+func endpointBucketLabel(key string) string {
+	for _, bucket := range endpointBuckets {
+		if bucket.key == key {
+			return bucket.label
+		}
+	}
+	return key
+}
+
+// endpointStatusPlain is the uncolored status used inside the highlighted bar,
+// where the accent background already carries the row's emphasis.
+func endpointStatusPlain(option endpointChoice) string {
 	switch option.availability {
 	case endpointReachable:
 		if option.skipProbe {
-			parts = append(parts, "ready")
-		} else {
-			parts = append(parts, "reachable")
+			return "● ready"
 		}
+		return "● reachable"
 	case endpointChecking:
-		parts = append(parts, "checking…")
+		return "◌ checking"
 	case endpointUnreachable:
-		parts = append(parts, "not reachable · connection is still allowed")
+		return "○ not reachable"
+	default:
+		return first(option.source, "configured")
 	}
-	if len(parts) == 0 {
-		return "configured endpoint"
-	}
-	return strings.Join(parts, " · ")
 }
 
 func (m Model) endpointStatus(option endpointChoice) string {
@@ -214,14 +212,8 @@ func connectCardMetrics(width int, compact bool) (innerWidth, horizontalPadding,
 }
 
 func (m Model) connectFooter() string {
-	switch {
-	case m.connect.editing:
+	if m.connect.editing {
 		return "type endpoint · enter add · esc cancel"
-	case m.connect.pickerOpen:
-		return "↑↓ choose · enter select · e edit · esc close"
-	case m.connect.focus == connectFocusEndpoint:
-		return fmt.Sprintf("enter choose · ←→ switch · e edit · ↓ connect · ctrl+c quit")
-	default:
-		return "↑ endpoint · enter connect · ctrl+c quit"
 	}
+	return "↑/↓ choose · enter connect · e edit · ctrl+c quit"
 }
