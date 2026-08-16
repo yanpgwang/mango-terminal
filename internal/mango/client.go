@@ -45,8 +45,14 @@ func (e *APIError) Error() string { return fmt.Sprintf("Mango API %s: %s", e.Sta
 func New(config Config) (*Client, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
 	parsed, err := url.Parse(baseURL)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return nil, fmt.Errorf("invalid Mango URL %q", baseURL)
+	}
+	if parsed.User != nil {
+		return nil, fmt.Errorf("invalid Mango URL %q: credentials do not belong in the endpoint URL", baseURL)
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, fmt.Errorf("invalid Mango URL %q: query parameters and fragments are not supported", baseURL)
 	}
 	httpClient := config.HTTPClient
 	if httpClient == nil {

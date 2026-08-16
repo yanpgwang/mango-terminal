@@ -101,6 +101,10 @@ func (m Model) viewCursor() *tea.Cursor {
 		modal := m.renderDialog()
 		xOffset += max(0, (m.width-lipgloss.Width(modal))/2)
 		yOffset += max(0, (m.height-lipgloss.Height(modal))/2)
+	} else if m.screen == screenConnect && m.connect.editing {
+		source = m.connect.endpointInput.Cursor()
+		layout := m.buildConnectLayout()
+		xOffset, yOffset = layout.inputX, layout.inputY
 	} else {
 		if m.focus != focusEditor {
 			return nil
@@ -179,6 +183,9 @@ func (m *Model) resize() {
 	}
 	m.editor.SetWidth(innerWidth)
 	m.filter.SetWidth(max(12, dialogInnerWidth(m.dialogWidth())-3))
+	_, _, connectWidth, connectCompact := connectDimensions(m.width, m.height)
+	connectInputWidth, _, _ := connectCardMetrics(connectWidth, connectCompact)
+	m.connect.endpointInput.SetWidth(connectInputWidth)
 	composerHeight := m.composerHeight()
 	// Chat viewport consumes the left column below the shared Session header.
 	// Conversation info and help each own one line beneath it.
@@ -753,30 +760,7 @@ func sessionStatePip(t theme, status string) string {
 }
 
 func (m Model) renderConnect() string {
-	width, height := max(1, m.width), max(1, m.height)
-	contentWidth := min(58, max(34, width-2))
-	endpoint := first(strings.TrimSpace(m.options.Endpoint), "Mango Cloud")
-	lines := []string{
-		m.brandLogo(false),
-		"",
-		m.theme.title.Render("Connect to Mango Cloud"),
-		m.theme.dim.Render(truncate(endpoint, contentWidth)),
-		"",
-	}
-	if m.loading {
-		lines = append(lines, m.activity(first(m.loadingLabel, "Connecting to Mango Cloud")))
-	} else {
-		lines = append(lines,
-			choice(m.theme, "Connect", true, false),
-			m.theme.dim.Render("Sessions keep running after you leave this window."),
-			m.theme.dim.Render("enter connect  ctrl+c quit"),
-		)
-	}
-	if m.err != nil {
-		lines = append(lines, "", m.theme.danger.Render(trimOneLine(m.err.Error(), contentWidth)))
-	}
-	card := lipgloss.NewStyle().Width(contentWidth).Render(strings.Join(lines, "\n"))
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, card)
+	return m.buildConnectLayout().view
 }
 
 func (m Model) renderDialog() string {

@@ -11,6 +11,18 @@ import (
 	"time"
 )
 
+func TestClientRejectsCredentialsInEndpointURL(t *testing.T) {
+	if _, err := New(Config{BaseURL: "https://secret@example.com"}); err == nil {
+		t.Fatal("client accepted credentials embedded in endpoint URL")
+	}
+	if _, err := New(Config{BaseURL: "https://example.com?api_key=secret"}); err == nil {
+		t.Fatal("client accepted query parameters in endpoint URL")
+	}
+	if _, err := New(Config{BaseURL: "ftp://example.com"}); err == nil {
+		t.Fatal("client accepted unsupported endpoint scheme")
+	}
+}
+
 func TestClientUsesManagedAgentsEventContract(t *testing.T) {
 	var posted []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

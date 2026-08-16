@@ -49,11 +49,20 @@ Equivalent flags are `--url` and `--api-key`. Finite API requests time out
 after 30 seconds; long-lived event streams are governed by their attachment
 context and reconnect independently.
 
+The welcome screen probes the configured, saved, and common local endpoints
+without delaying the UI. Press `Enter` on Endpoint to open the picker, use
+`Up`/`Down` and `Enter` to select, then press `Enter` on Connect. Press `e` to
+add an `http://` or `https://` endpoint manually. A successful connection is
+remembered in the user configuration directory as `mango/connection.json`;
+API keys are never written to that file.
+
 ## Interaction
 
 The normal path is visible on screen and does not require memorizing commands:
 
-1. The centered Mango welcome connects to the configured control plane.
+1. The framed Mango welcome uses a gently animated cloud scene and an endpoint
+   picker. It detects saved and common local candidates, accepts a manual URL,
+   validates the connection, and remembers the successful selection.
 2. The home screen lists `Create a new Session`, `Find a Session`, `Refresh
    from Cloud`, and every durable Session.
    Press `m` on a Session to rename it, interrupt all active work, archive it,

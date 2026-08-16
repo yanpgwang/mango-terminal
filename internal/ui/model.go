@@ -145,6 +145,7 @@ type Model struct {
 	filter  textinput.Model
 	spinner spinner.Model
 	theme   theme
+	connect connectState
 	compact bool
 	follow  bool
 	motion  int
@@ -205,6 +206,7 @@ func NewWithOptions(backend mango.Backend, directAttach string, options Options)
 	filterStyles.Blurred = filterStyles.Focused
 	filter.SetStyles(filterStyles)
 	filter.Blur()
+	connect := newConnectState(options, t)
 
 	chat := viewport.New()
 	chat.SoftWrap = true
@@ -221,7 +223,7 @@ func NewWithOptions(backend mango.Backend, directAttach string, options Options)
 		previews: map[string]*preview{}, unread: map[string]int{},
 		expanded: map[string]bool{}, itemCursor: -1,
 		fresh: map[string]int{}, markdown: newMarkdownState(),
-		chat: chat, editor: editor, filter: filter, spinner: work, theme: t,
+		chat: chat, editor: editor, filter: filter, spinner: work, theme: t, connect: connect,
 		loading: directAttach != "", loadingLabel: loadingLabel, follow: true,
 		directAttach: directAttach, windowFocused: true, options: options,
 	}
@@ -231,7 +233,8 @@ func (m Model) Init() tea.Cmd {
 	if m.directAttach != "" {
 		return tea.Batch(m.attach(m.directAttach), m.spinner.Tick)
 	}
-	return m.spinner.Tick
+	commands := append([]tea.Cmd{m.spinner.Tick}, m.endpointProbeCommands()...)
+	return tea.Batch(commands...)
 }
 
 func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
@@ -273,12 +276,21 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.BlurMsg:
 		m.windowFocused = false
 		return m, nil
+	case endpointProbeDone:
+		return m.applyEndpointProbe(msg), nil
+	case endpointSaved:
+		if msg.err != nil {
+			m.status = "connected · endpoint not saved"
+			m.err = fmt.Errorf("endpoint was not saved: %w", msg.err)
+		}
+		return m, nil
 	case inboxLoaded:
 		m.loading, m.err = false, msg.err
 		if msg.err == nil {
 			m.sessions = fleetOrder(msg.sessions)
 			m.status, m.screen = "connected", screenInbox
 			m.inboxCursor = clamp(m.inboxCursor, 0, max(2, len(m.sessions)+2))
+			return m, m.saveSelectedEndpoint()
 		} else {
 			m.screen, m.status = screenConnect, "connection failed"
 		}
@@ -456,6 +468,11 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateInbox(msg)
 		}
 		return m.updateChat(msg)
+	case tea.PasteMsg:
+		if m.screen == screenConnect {
+			return m.updateConnectPaste(msg)
+		}
+		return m, nil
 	case tea.MouseWheelMsg:
 		if m.screen != screenChat || m.dialog != dialogNone {
 			return m, nil
@@ -479,21 +496,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateConnect(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch key.String() {
-	case "enter":
-		if m.loading {
-			return m, nil
-		}
-		m.loading, m.loadingLabel, m.err = true, "Connecting to Mango Cloud", nil
-		return m, m.loadInbox()
-	case "ctrl+p":
-		m.openCommands()
-		return m, nil
-	case "?":
-		m.dialog = dialogHelp
-		return m, nil
-	}
-	return m, nil
+	return m.updateConnectKey(key)
 }
 
 func (m Model) updateInbox(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {

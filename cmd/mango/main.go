@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/yanpgwang/mango-terminal/internal/demo"
+	"github.com/yanpgwang/mango-terminal/internal/endpoint"
 	"github.com/yanpgwang/mango-terminal/internal/mango"
 	"github.com/yanpgwang/mango-terminal/internal/ui"
 )
@@ -18,8 +19,16 @@ var (
 )
 
 func main() {
+	savedURL, _ := endpoint.Load()
+	defaultURL := os.Getenv("MANGO_URL")
+	if defaultURL == "" {
+		defaultURL = savedURL
+	}
+	if defaultURL == "" {
+		defaultURL = endpoint.DefaultURL
+	}
 	flags := flag.NewFlagSet("mango", flag.ExitOnError)
-	baseURL := flags.String("url", envOr("MANGO_URL", "http://127.0.0.1:8080"), "Mango API base URL")
+	baseURL := flags.String("url", defaultURL, "Mango API base URL")
 	apiKey := flags.String("api-key", os.Getenv("MANGO_API_KEY"), "Mango API key")
 	demoMode := flags.Bool("demo", false, "Explore the interface without a Mango server")
 	notify := flags.String("notify", envOr("MANGO_NOTIFY", "disabled"), "Background notifications: disabled, bell, or osc777")
@@ -41,18 +50,29 @@ func main() {
 		attachID = arguments[1]
 	}
 
-	var backend mango.Backend
-	endpointLabel := *baseURL
-	if *demoMode {
-		backend = demo.New()
-		endpointLabel = "Local demo · no server required"
-	} else {
-		client, err := mango.New(mango.Config{BaseURL: *baseURL, APIKey: *apiKey})
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "mango:", err)
-			os.Exit(2)
+	selectedEndpoint, err := resolveEndpoint(*baseURL, *demoMode)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "mango:", err)
+		os.Exit(2)
+	}
+	backendForEndpoint := func(target string) (mango.Backend, error) {
+		if target == endpoint.DemoURL {
+			return demo.New(), nil
 		}
-		backend = client
+		return mango.New(mango.Config{BaseURL: target, APIKey: *apiKey})
+	}
+	backend, err := backendForEndpoint(selectedEndpoint)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "mango:", err)
+		os.Exit(2)
+	}
+	discovered := endpoint.Discover(selectedEndpoint, os.Getenv("MANGO_URL"), savedURL, *demoMode)
+	endpointOptions := make([]ui.EndpointOption, 0, len(discovered))
+	for _, candidate := range discovered {
+		endpointOptions = append(endpointOptions, ui.EndpointOption{
+			URL: candidate.URL, Label: candidate.Label, Source: candidate.Source,
+			Available: candidate.Available, SkipProbe: candidate.SkipProbe,
+		})
 	}
 
 	notificationMode := ui.NotificationMode(*notify)
@@ -63,9 +83,13 @@ func main() {
 		os.Exit(2)
 	}
 	program := tea.NewProgram(ui.NewWithOptions(backend, attachID, ui.Options{
-		Notifications: notificationMode,
-		ReducedMotion: *noMotion,
-		Endpoint:      endpointLabel,
+		Notifications:      notificationMode,
+		ReducedMotion:      *noMotion,
+		Endpoint:           selectedEndpoint,
+		Endpoints:          endpointOptions,
+		BackendForEndpoint: backendForEndpoint,
+		ProbeEndpoint:      endpoint.Probe,
+		SaveEndpoint:       endpoint.Save,
 	}))
 	if _, err := program.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "mango:", err)
@@ -85,9 +109,17 @@ func envBool(name string) bool {
 		return false
 	}
 }
+
 func envOr(name, fallback string) string {
 	if value := os.Getenv(name); value != "" {
 		return value
 	}
 	return fallback
+}
+
+func resolveEndpoint(value string, demoMode bool) (string, error) {
+	if demoMode {
+		return endpoint.DemoURL, nil
+	}
+	return endpoint.Normalize(value)
 }

@@ -422,7 +422,7 @@ func TestConnectionLogoUsesRestrainedWelcomeScene(t *testing.T) {
 		t.Fatal("connection logo has no ANSI color treatment")
 	}
 	if !strings.Contains(plain, "Welcome to Mango") || !strings.Contains(plain, "managed agents, one window") ||
-		!strings.Contains(plain, "████████") {
+		!strings.Contains(plain, "•ᴗ•") || strings.Contains(plain, "████") {
 		t.Fatalf("connection logo lost the Mango welcome scene: %q", plain)
 	}
 	if width := lipgloss.Width(logo); width > 58 {
@@ -438,13 +438,165 @@ func TestConnectionLogoFitsMinimumSupportedTerminal(t *testing.T) {
 	model.width, model.height, model.screen = 60, 20, screenConnect
 	view := model.renderConnect()
 	if width := lipgloss.Width(view); width > model.width {
-		t.Fatalf("connection view width=%d terminal=%d", width, model.width)
+		t.Fatalf("connection view width=%d terminal=%d: %q", width, model.width, ansi.Strip(view))
 	}
 	if height := lipgloss.Height(view); height > model.height {
 		t.Fatalf("connection view height=%d terminal=%d", height, model.height)
 	}
 	if plain := ansi.Strip(view); !strings.Contains(plain, "Connect") || !strings.Contains(plain, "Welcome to Mango") {
 		t.Fatalf("connection view lost controls or welcome: %q", plain)
+	}
+}
+
+func TestEndpointPickerSelectsBeforeConnecting(t *testing.T) {
+	selected := ""
+	model := NewWithOptions(demo.New(), "", Options{
+		Endpoint: "http://first.example.com",
+		Endpoints: []EndpointOption{
+			{URL: "http://first.example.com", Source: "saved"},
+			{URL: "https://second.example.com", Source: "configured"},
+		},
+		BackendForEndpoint: func(target string) (mango.Backend, error) {
+			selected = target
+			return demo.New(), nil
+		},
+	})
+	updated, command := model.updateConnect(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	if command != nil || !model.connect.pickerOpen {
+		t.Fatalf("enter on endpoint pickerOpen=%v command=%v", model.connect.pickerOpen, command)
+	}
+	updated, _ = model.updateConnect(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	model = updated.(Model)
+	updated, _ = model.updateConnect(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	if model.connect.pickerOpen || model.connect.selected != 1 || model.connect.focus != connectFocusButton {
+		t.Fatalf("selected=%d picker=%v focus=%v", model.connect.selected, model.connect.pickerOpen, model.connect.focus)
+	}
+	updated, command = model.updateConnect(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	if command == nil || !model.loading || selected != "https://second.example.com" {
+		t.Fatalf("command=%v loading=%v selected=%q", command, model.loading, selected)
+	}
+}
+
+func TestEndpointManualEntryNormalizesAndReturnsToConnect(t *testing.T) {
+	model := NewWithOptions(demo.New(), "", Options{
+		Endpoint:  "demo://local",
+		Endpoints: []EndpointOption{{URL: "demo://local", Label: "Local demo", Available: true, SkipProbe: true}},
+	})
+	updated, _ := model.updateConnect(tea.KeyPressMsg(tea.Key{Code: 'e', Text: "e"}))
+	model = updated.(Model)
+	if !model.connect.editing {
+		t.Fatal("manual endpoint editor did not open")
+	}
+	for _, character := range "localhost:9090" {
+		updated, _ = model.updateConnect(tea.KeyPressMsg(tea.Key{Code: character, Text: string(character)}))
+		model = updated.(Model)
+	}
+	updated, _ = model.updateConnect(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	if model.connect.editing || model.connect.focus != connectFocusButton || model.connect.current().url != "http://localhost:9090" {
+		t.Fatalf("editing=%v focus=%v endpoint=%q", model.connect.editing, model.connect.focus, model.connect.current().url)
+	}
+}
+
+func TestEndpointEditorAcceptsBracketedPaste(t *testing.T) {
+	model := NewWithOptions(demo.New(), "", Options{
+		Endpoint:  "demo://local",
+		Endpoints: []EndpointOption{{URL: "demo://local", Label: "Local demo", Available: true, SkipProbe: true}},
+	})
+	updated, _ := model.updateConnect(tea.KeyPressMsg(tea.Key{Code: 'e', Text: "e"}))
+	model = updated.(Model)
+	updated, _ = model.Update(tea.PasteMsg{Content: "https://mango.example.com"})
+	model = updated.(Model)
+	if got := model.connect.endpointInput.Value(); got != "https://mango.example.com" {
+		t.Fatalf("pasted endpoint=%q", got)
+	}
+}
+
+func TestEndpointSaveFailureIsVisibleAfterConnecting(t *testing.T) {
+	model := NewWithOptions(demo.New(), "", Options{
+		Endpoint:  "https://mango.example.com",
+		Endpoints: []EndpointOption{{URL: "https://mango.example.com"}},
+		SaveEndpoint: func(string) error {
+			return errors.New("read-only config")
+		},
+	})
+	model.connect.focus = connectFocusButton
+	updated, load := model.updateConnect(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	updated, save := model.Update(load())
+	model = updated.(Model)
+	if save == nil || model.screen != screenInbox {
+		t.Fatalf("save=%v screen=%v", save, model.screen)
+	}
+	updated, _ = model.Update(save())
+	model = updated.(Model)
+	if model.err == nil || !strings.Contains(model.err.Error(), "not saved") {
+		t.Fatalf("save error was not visible: %v", model.err)
+	}
+}
+
+func TestEndpointPickerAndEditorFitMinimumTerminal(t *testing.T) {
+	model := NewWithOptions(demo.New(), "", Options{
+		Endpoint: "http://127.0.0.1:8080",
+		Endpoints: []EndpointOption{
+			{URL: "http://127.0.0.1:8080", Source: "local default"},
+			{URL: "https://mango.example.com", Source: "saved"},
+		},
+	})
+	model.width, model.height = 60, 20
+	model.resize()
+	model.connect.pickerOpen = true
+	for state, view := range map[string]string{
+		"picker": model.renderConnect(),
+	} {
+		if lipgloss.Width(view) > model.width || lipgloss.Height(view) > model.height {
+			t.Fatalf("%s is %dx%d in %dx%d", state, lipgloss.Width(view), lipgloss.Height(view), model.width, model.height)
+		}
+	}
+	model.connect.pickerOpen = false
+	model.connect.editing = true
+	model.connect.endpointInput.Focus()
+	model.connect.endpointInput.SetValue("https://a-very-long-endpoint-name-for-a-small-terminal.example.com")
+	view := model.renderConnect()
+	if lipgloss.Width(view) > model.width || lipgloss.Height(view) > model.height {
+		t.Fatalf("editor is %dx%d in %dx%d", lipgloss.Width(view), lipgloss.Height(view), model.width, model.height)
+	}
+	cursor := model.View().Cursor
+	if cursor == nil || cursor.X < 0 || cursor.X >= model.width || cursor.Y < 0 || cursor.Y >= model.height {
+		t.Fatalf("endpoint editor cursor=%#v", cursor)
+	}
+	_, _, connectWidth, compact := connectDimensions(model.width, model.height)
+	wantInputWidth, _, _ := connectCardMetrics(connectWidth, compact)
+	if model.connect.endpointInput.Width() != wantInputWidth {
+		t.Fatalf("endpoint input width=%d card width=%d", model.connect.endpointInput.Width(), wantInputWidth)
+	}
+}
+
+func TestNormalizeEndpointRejectsEmbeddedCredentials(t *testing.T) {
+	if _, err := normalizeEndpoint("https://secret@example.com"); err == nil {
+		t.Fatal("endpoint accepted embedded credentials")
+	}
+	if got, err := normalizeEndpoint("localhost:8080/"); err != nil || got != "http://localhost:8080" {
+		t.Fatalf("normalize=%q err=%v", got, err)
+	}
+	if _, err := normalizeEndpoint("https://example.com?api_key=secret"); err == nil {
+		t.Fatal("endpoint accepted query parameters")
+	}
+}
+
+func TestConnectCloudsAnimateWithoutChangingBounds(t *testing.T) {
+	model := New(demo.New(), "")
+	firstFrame := ansi.Strip(model.cloudScene(58, false))
+	model.motion = 18
+	secondFrame := ansi.Strip(model.cloudScene(58, false))
+	if firstFrame == secondFrame {
+		t.Fatal("cloud scene did not move")
+	}
+	if lipgloss.Width(firstFrame) != lipgloss.Width(secondFrame) || lipgloss.Height(firstFrame) != lipgloss.Height(secondFrame) {
+		t.Fatalf("animation changed bounds: %dx%d -> %dx%d", lipgloss.Width(firstFrame), lipgloss.Height(firstFrame), lipgloss.Width(secondFrame), lipgloss.Height(secondFrame))
 	}
 }
 
@@ -827,6 +979,8 @@ func TestConnectThenHomeStartsWithVisibleCreateChoice(t *testing.T) {
 	if model.screen != screenConnect || model.loading {
 		t.Fatalf("initial screen=%v loading=%v", model.screen, model.loading)
 	}
+	updated, _ := model.updateConnect(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	model = updated.(Model)
 	updated, command := model.updateConnect(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	model = updated.(Model)
 	if command == nil || !model.loading {
