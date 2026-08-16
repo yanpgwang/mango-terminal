@@ -97,7 +97,12 @@ ETAs the protocol does not provide.
 With no attached Session, there is no chat editor. The home screen is a durable
 Session list with visible create, find, and refresh choices. Session creation
 opens a dialog flow and performs the control-plane mutation only after final
-review.
+review. Session management is a separate guarded flow: title updates are
+reversible, archive preserves history, and permanent deletion explicitly names
+its event-history impact. Archive and deletion are disabled while work is
+running; the same menu can issue a Session-wide interrupt first. The selected
+Session ID is captured when the menu opens so later cursor movement cannot
+retarget a destructive request.
 
 The UI composes Bubble Tea v2 primitives rather than maintaining terminal
 input mechanics itself: `textarea` owns multiline conversation/form input,
@@ -122,5 +127,5 @@ the terminal.
 
 `internal/demo` is a Mango Backend implementation backed by in-memory event
 ledgers. It exists for product review and UI regression, not as a parallel
-protocol. Sending, interrupts, and action responses travel through the same UI
-commands used by the HTTP client.
+protocol. Sending, interrupts, action responses, renames, archives, and deletes
+travel through the same UI commands used by the HTTP client.

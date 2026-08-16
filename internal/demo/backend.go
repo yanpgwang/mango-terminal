@@ -22,6 +22,10 @@ type Backend struct {
 	created        map[string]mango.Session
 	createdTrees   map[string][]mango.Thread
 	createdLogs    map[string]map[string][]mango.Event
+	titles         map[string]string
+	status         map[string]string
+	archived       map[string]time.Time
+	deleted        map[string]bool
 	subscribers    map[int]chan mango.StreamUpdate
 	nextSubscriber int
 	nextID         int
@@ -86,6 +90,8 @@ func New() *Backend {
 		agents: []mango.Agent{session.Agent}, environments: []mango.Environment{environment},
 		created: map[string]mango.Session{}, createdTrees: map[string][]mango.Thread{},
 		createdLogs: map[string]map[string][]mango.Event{},
+		titles:      map[string]string{}, status: map[string]string{},
+		archived: map[string]time.Time{}, deleted: map[string]bool{},
 		subscribers: make(map[int]chan mango.StreamUpdate), nextID: 100,
 	}
 }
@@ -105,13 +111,15 @@ func thread(id, parentID, name, status string) mango.Thread {
 func (b *Backend) ListSessions(context.Context) ([]mango.Session, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	second := b.session
-	second.ID, second.Title, second.Status = "sesn_demo_incident_review", "Investigate checkout latency", "running"
-	second.CreatedAt = second.CreatedAt.Add(-2 * time.Hour)
-	second.UpdatedAt = time.Now().UTC().Add(-25 * time.Second)
-	sessions := []mango.Session{b.session, second}
-	for _, session := range b.created {
-		sessions = append(sessions, session)
+	ids := []string{b.session.ID, "sesn_demo_incident_review"}
+	for id := range b.created {
+		ids = append(ids, id)
+	}
+	sessions := make([]mango.Session, 0, len(ids))
+	for _, id := range ids {
+		if session, ok := b.sessionLocked(id); ok {
+			sessions = append(sessions, session)
+		}
 	}
 	return sessions, nil
 }
@@ -207,18 +215,64 @@ func (b *Backend) CreateSession(_ context.Context, input mango.CreateSessionInpu
 	return session, nil
 }
 
+func (b *Backend) UpdateSessionTitle(_ context.Context, sessionID, title string) (mango.Session, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	session, ok := b.sessionLocked(sessionID)
+	if !ok {
+		return mango.Session{}, fmt.Errorf("demo Session %s not found", sessionID)
+	}
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return mango.Session{}, fmt.Errorf("Session title cannot be empty")
+	}
+	b.titles[sessionID] = title
+	session.Title, session.UpdatedAt = title, time.Now().UTC()
+	return session, nil
+}
+
+func (b *Backend) ArchiveSession(_ context.Context, sessionID string) (mango.Session, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	session, ok := b.sessionLocked(sessionID)
+	if !ok {
+		return mango.Session{}, fmt.Errorf("demo Session %s not found", sessionID)
+	}
+	if session.Status == "running" || session.Status == "rescheduling" {
+		return mango.Session{}, fmt.Errorf("interrupt active work before archiving this Session")
+	}
+	now := time.Now().UTC()
+	b.archived[sessionID] = now
+	session.ArchivedAt = &now
+	return session, nil
+}
+
+func (b *Backend) DeleteSession(_ context.Context, sessionID string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	session, ok := b.sessionLocked(sessionID)
+	if !ok {
+		return fmt.Errorf("demo Session %s not found", sessionID)
+	}
+	if session.Status == "running" || session.Status == "rescheduling" {
+		return fmt.Errorf("interrupt active work before deleting this Session")
+	}
+	b.deleted[sessionID] = true
+	delete(b.created, sessionID)
+	delete(b.createdTrees, sessionID)
+	delete(b.createdLogs, sessionID)
+	return nil
+}
+
 func (b *Backend) Attach(ctx context.Context, sessionID string) (mango.Attachment, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if session, ok := b.created[sessionID]; ok {
-		return b.attachment(ctx, session, b.createdTrees[sessionID], b.createdLogs[sessionID]), nil
-	}
-	if sessionID != b.session.ID && sessionID != "sesn_demo_incident_review" {
+	session, ok := b.sessionLocked(sessionID)
+	if !ok {
 		return mango.Attachment{}, fmt.Errorf("demo Session %s not found", sessionID)
 	}
-	session := b.session
-	if sessionID == "sesn_demo_incident_review" {
-		session.ID, session.Title, session.Status = sessionID, "Investigate checkout latency", "running"
+	if _, created := b.created[sessionID]; created {
+		return b.attachment(ctx, session, b.createdTrees[sessionID], b.createdLogs[sessionID]), nil
 	}
 	return b.attachment(ctx, session, b.threads, b.events), nil
 }
@@ -254,12 +308,12 @@ func (b *Backend) attachment(ctx context.Context, session mango.Session, threads
 func (b *Backend) Refresh(_ context.Context, sessionID string) (mango.Summary, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if session, ok := b.created[sessionID]; ok {
-		return mango.Summary{Session: session, Threads: append([]mango.Thread(nil), b.createdTrees[sessionID]...)}, nil
+	session, ok := b.sessionLocked(sessionID)
+	if !ok {
+		return mango.Summary{}, fmt.Errorf("demo Session %s not found", sessionID)
 	}
-	session := b.session
-	if sessionID == "sesn_demo_incident_review" {
-		session.ID, session.Title, session.Status = sessionID, "Investigate checkout latency", "running"
+	if _, created := b.created[sessionID]; created {
+		return mango.Summary{Session: session, Threads: append([]mango.Thread(nil), b.createdTrees[sessionID]...)}, nil
 	}
 	return mango.Summary{Session: session, Threads: append([]mango.Thread(nil), b.threads...)}, nil
 }
@@ -366,11 +420,44 @@ func (b *Backend) Interrupt(_ context.Context, sessionID string, threadID string
 	}
 	if threadID == "" {
 		threadID = primary
+		b.status[sessionID] = "idle"
 	}
 	event := b.event("user.interrupt", map[string]any{"session_thread_id": threadID})
 	logs[threadID] = append(logs[threadID], event)
 	b.broadcastLocked(mango.StreamUpdate{ThreadID: threadID, Frame: event})
 	return []mango.Event{event}, nil
+}
+
+func (b *Backend) sessionLocked(sessionID string) (mango.Session, bool) {
+	if b.deleted[sessionID] {
+		return mango.Session{}, false
+	}
+	if _, archived := b.archived[sessionID]; archived {
+		return mango.Session{}, false
+	}
+	var session mango.Session
+	switch {
+	case sessionID == b.session.ID:
+		session = b.session
+	case sessionID == "sesn_demo_incident_review":
+		session = b.session
+		session.ID, session.Title, session.Status = sessionID, "Investigate checkout latency", "running"
+		session.CreatedAt = session.CreatedAt.Add(-2 * time.Hour)
+		session.UpdatedAt = time.Now().UTC().Add(-25 * time.Second)
+	default:
+		var ok bool
+		session, ok = b.created[sessionID]
+		if !ok {
+			return mango.Session{}, false
+		}
+	}
+	if title := b.titles[sessionID]; title != "" {
+		session.Title = title
+	}
+	if status := b.status[sessionID]; status != "" {
+		session.Status = status
+	}
+	return session, true
 }
 
 func (b *Backend) ResolveAction(_ context.Context, sessionID string, action mango.Action, response mango.ActionResponse) ([]mango.Event, error) {

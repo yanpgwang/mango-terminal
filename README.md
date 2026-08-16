@@ -56,6 +56,10 @@ The normal path is visible on screen and does not require memorizing commands:
 1. The centered Mango welcome connects to the configured control plane.
 2. The home screen lists `Create a new Session`, `Find a Session`, `Refresh
    from Cloud`, and every durable Session.
+   Press `m` on a Session to rename it, interrupt all active work, archive it,
+   or permanently delete it and its event history. Destructive operations open
+   with the safe choice selected, and running Sessions must be interrupted
+   before archive or deletion.
 3. New Session is a sequence of searchable dialogs: Agent, Environment,
    Session details, review. `Create a new Agent` and `Create a cloud
    Environment` are ordinary choices in those lists.
@@ -78,7 +82,8 @@ through the composer, conversation, and Subagent workspace; `Enter` opens a
 child transcript, `Space` previews it without leaving the rail, and `x` opens
 an explicit child interrupt confirmation. `Ctrl+P`, `Ctrl+G`, `Ctrl+S`, and
 `Ctrl+N` remain optional accelerators for commands, Agents, Session search, and
-creation. `Ctrl+C` exits the terminal without stopping remote work.
+creation. The command palette exposes the same Session management flow while
+attached. `Ctrl+C` exits the terminal without stopping remote work.
 
 Every searchable picker and text editor uses a real terminal cursor from the
 Bubble Tea v2 components. This gives Chinese/Japanese/Korean IMEs a stable

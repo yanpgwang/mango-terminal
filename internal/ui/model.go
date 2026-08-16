@@ -44,6 +44,11 @@ const (
 	dialogInterrupt
 	dialogNewSession
 	dialogSessions
+	dialogSessionActions
+	dialogRenameSession
+	dialogInterruptSession
+	dialogArchiveSession
+	dialogDeleteSession
 	dialogHelp
 	dialogQuit
 )
@@ -111,11 +116,14 @@ type Model struct {
 	pendingSignature       string
 	pendingDismissed       bool
 
-	sessions       []mango.Session
-	inboxCursor    int
-	inboxFilter    string
-	lastAttachedID string
-	railCursor     int
+	sessions            []mango.Session
+	inboxCursor         int
+	inboxFilter         string
+	lastAttachedID      string
+	railCursor          int
+	sessionAction       mango.Session
+	sessionActionParent dialog
+	sessionActionCursor int
 
 	session      *mango.Session
 	threads      []mango.Thread
@@ -270,7 +278,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err == nil {
 			m.sessions = fleetOrder(msg.sessions)
 			m.status, m.screen = "connected", screenInbox
-			m.inboxCursor = clamp(m.inboxCursor, 0, max(0, len(m.sessions)-1))
+			m.inboxCursor = clamp(m.inboxCursor, 0, max(2, len(m.sessions)+2))
 		} else {
 			m.screen, m.status = screenConnect, "connection failed"
 		}
@@ -295,6 +303,8 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.sessionCreated(msg)
+	case sessionMutationDone:
+		return m.handleSessionMutation(msg)
 	case attachedLoaded:
 		m.loading, m.err = false, msg.err
 		if msg.err != nil {
@@ -539,6 +549,12 @@ func (m Model) updateInbox(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		m.loading, m.loadingLabel, m.err = true, "Refreshing Sessions", nil
 		return m, m.loadInbox()
+	case "m":
+		index := m.inboxCursor - 3
+		if index >= 0 && index < len(m.sessions) {
+			m.openSessionManager(m.sessions[index], dialogNone)
+		}
+		return m, nil
 	case "enter":
 		if m.loading {
 			return m, nil
@@ -745,6 +761,9 @@ func (m Model) updateDialog(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.dialog == dialogNewSession {
 		return m.updateNewSession(key)
 	}
+	if m.sessionManagerDialog() {
+		return m.updateSessionManagerDialog(key)
+	}
 	if m.dialog == dialogResult {
 		if m.loading {
 			return m, nil
@@ -854,6 +873,10 @@ func (m Model) updateDialog(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.inboxCursor = wrap(m.inboxCursor+1, len(filtered))
 		case "ctrl+n":
 			return m.startNewSession()
+		case "ctrl+e":
+			if len(filtered) > 0 {
+				m.openSessionManager(filtered[clamp(m.inboxCursor, 0, len(filtered)-1)], dialogSessions)
+			}
 		case "ctrl+u":
 			m.inboxFilter, m.inboxCursor = "", 0
 			m.filter.Reset()
@@ -924,6 +947,7 @@ func (m Model) commands() []commandItem {
 	commands := []commandItem{
 		{"new_session", "New Session", "choose an Agent and Environment"},
 		{"sessions", "Sessions", "open or switch durable Session"},
+		{"manage_session", "Manage Session", "rename, interrupt, archive, or delete"},
 		{"agents", "Switch Agent view", "open the Agent picker"},
 		{"interrupt", "Interrupt current Agent", "cancel only the selected Thread"},
 		{"interrupt_all", "Interrupt all Agents", "cancel the whole Session"},
@@ -959,6 +983,10 @@ func (m Model) runCommand(id string) (tea.Model, tea.Cmd) {
 		return m.startNewSession()
 	case "sessions":
 		m.openSessions()
+	case "manage_session":
+		if m.session != nil {
+			m.openSessionManager(*m.session, dialogNone)
+		}
 	case "actions":
 		m.pendingDismissed = false
 		m.openActionDialog(false)

@@ -136,6 +136,56 @@ func TestClientCreatesAgentEnvironmentAndSession(t *testing.T) {
 	}
 }
 
+func TestClientManagesSessionLifecycle(t *testing.T) {
+	var requests []struct {
+		method string
+		path   string
+		body   map[string]any
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if r.Body != nil && r.ContentLength != 0 {
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+		}
+		requests = append(requests, struct {
+			method string
+			path   string
+			body   map[string]any
+		}{r.Method, r.URL.Path, body})
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/archive"):
+			writeJSON(t, w, map[string]any{"id": "sesn_1", "title": "Renamed", "status": "idle", "archived_at": time.Now().UTC()})
+		case r.Method == http.MethodPost:
+			writeJSON(t, w, map[string]any{"id": "sesn_1", "title": body["title"], "status": "idle"})
+		case r.Method == http.MethodDelete:
+			writeJSON(t, w, map[string]any{"id": "sesn_1", "type": "session_deleted"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client, _ := New(Config{BaseURL: server.URL})
+	ctx := context.Background()
+	renamed, err := client.UpdateSessionTitle(ctx, "sesn_1", "  Renamed  ")
+	if err != nil || renamed.Title != "Renamed" {
+		t.Fatalf("rename = %+v, %v", renamed, err)
+	}
+	archived, err := client.ArchiveSession(ctx, "sesn_1")
+	if err != nil || archived.ArchivedAt == nil {
+		t.Fatalf("archive = %+v, %v", archived, err)
+	}
+	if err := client.DeleteSession(ctx, "sesn_1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 3 || requests[0].method != http.MethodPost || requests[0].path != "/v1/sessions/sesn_1" ||
+		requests[0].body["title"] != "Renamed" || requests[1].path != "/v1/sessions/sesn_1/archive" ||
+		requests[2].method != http.MethodDelete || requests[2].path != "/v1/sessions/sesn_1" {
+		t.Fatalf("requests = %#v", requests)
+	}
+}
+
 func TestAttachOpensStreamBeforeListingHistory(t *testing.T) {
 	streamOpened := make(chan struct{}, 1)
 	streamRelease := make(chan struct{})

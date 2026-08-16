@@ -6,15 +6,16 @@ import (
 )
 
 type Session struct {
-	ID            string    `json:"id"`
-	Title         string    `json:"title"`
-	Status        string    `json:"status"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
-	EnvironmentID string    `json:"environment_id"`
-	Agent         Agent     `json:"agent"`
-	Stats         Stats     `json:"stats"`
-	Usage         Usage     `json:"usage"`
+	ID            string     `json:"id"`
+	Title         string     `json:"title"`
+	Status        string     `json:"status"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	ArchivedAt    *time.Time `json:"archived_at"`
+	EnvironmentID string     `json:"environment_id"`
+	Agent         Agent      `json:"agent"`
+	Stats         Stats      `json:"stats"`
+	Usage         Usage      `json:"usage"`
 }
 
 type Agent struct {
@@ -161,6 +162,9 @@ type Backend interface {
 	CreateAgent(context.Context, CreateAgentInput) (Agent, error)
 	CreateEnvironment(context.Context, CreateEnvironmentInput) (Environment, error)
 	CreateSession(context.Context, CreateSessionInput) (Session, error)
+	UpdateSessionTitle(context.Context, string, string) (Session, error)
+	ArchiveSession(context.Context, string) (Session, error)
+	DeleteSession(context.Context, string) error
 	Attach(context.Context, string) (Attachment, error)
 	Refresh(context.Context, string) (Summary, error)
 	SendMessage(context.Context, string, string) ([]Event, error)

@@ -157,6 +157,23 @@ func (c *Client) CreateSession(ctx context.Context, input CreateSessionInput) (S
 	return session, err
 }
 
+func (c *Client) UpdateSessionTitle(ctx context.Context, sessionID, title string) (Session, error) {
+	var session Session
+	err := c.do(ctx, http.MethodPost, "/v1/sessions/"+url.PathEscape(sessionID),
+		map[string]any{"title": strings.TrimSpace(title)}, &session)
+	return session, err
+}
+
+func (c *Client) ArchiveSession(ctx context.Context, sessionID string) (Session, error) {
+	var session Session
+	err := c.do(ctx, http.MethodPost, "/v1/sessions/"+url.PathEscape(sessionID)+"/archive", nil, &session)
+	return session, err
+}
+
+func (c *Client) DeleteSession(ctx context.Context, sessionID string) error {
+	return c.do(ctx, http.MethodDelete, "/v1/sessions/"+url.PathEscape(sessionID), nil, nil)
+}
+
 func (c *Client) Refresh(ctx context.Context, sessionID string) (Summary, error) {
 	var summary Summary
 	var err error

@@ -194,6 +194,121 @@ func TestCompactSessionCollapsesWorkspaceIntoAgentStrip(t *testing.T) {
 	}
 }
 
+func TestSessionManagerRenamesAndDeletesWithSafeConfirmation(t *testing.T) {
+	backend := demo.New()
+	sessions, err := backend.ListSessions(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := New(backend, "")
+	model.width, model.height, model.screen = 120, 36, screenInbox
+	model.sessions, model.inboxCursor = sessions, 3
+	model.resize()
+
+	updated, _ := model.updateInbox(tea.KeyPressMsg(tea.Key{Code: 'm'}))
+	model = updated.(Model)
+	if model.dialog != dialogSessionActions || model.sessionAction.ID != sessions[0].ID {
+		t.Fatalf("dialog=%v target=%q", model.dialog, model.sessionAction.ID)
+	}
+	manager := ansi.Strip(model.renderDialog())
+	for _, want := range []string{"Manage Session", "Rename", "Archive", "Delete permanently"} {
+		if !strings.Contains(manager, want) {
+			t.Fatalf("manager missing %q: %q", want, manager)
+		}
+	}
+
+	updated, _ = model.updateDialog(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	model.filter.SetValue("Launch decision room")
+	updated, command := model.updateDialog(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	if command == nil {
+		t.Fatal("rename produced no command")
+	}
+	updated, _ = model.Update(command())
+	model = updated.(Model)
+	if model.sessions[0].Title != "Launch decision room" || model.dialog != dialogSessionActions {
+		t.Fatalf("renamed=%q dialog=%v", model.sessions[0].Title, model.dialog)
+	}
+
+	model.sessionActionCursor = 3
+	updated, _ = model.updateDialog(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	if model.dialog != dialogDeleteSession || model.dialogCursor != 1 {
+		t.Fatalf("delete dialog=%v cursor=%d", model.dialog, model.dialogCursor)
+	}
+	// Enter starts on the safe choice and must not delete anything.
+	updated, command = model.updateDialog(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	if command != nil || model.dialog != dialogSessionActions || len(model.sessions) != 2 {
+		t.Fatalf("safe cancel command=%v dialog=%v sessions=%d", command, model.dialog, len(model.sessions))
+	}
+
+	model.sessionActionCursor = 3
+	updated, _ = model.updateDialog(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	updated, _ = model.updateDialog(tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft}))
+	model = updated.(Model)
+	updated, command = model.updateDialog(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	if command == nil {
+		t.Fatal("confirmed delete produced no command")
+	}
+	updated, _ = model.Update(command())
+	model = updated.(Model)
+	if len(model.sessions) != 1 || model.dialog != dialogNone || model.status != "Session deleted" {
+		t.Fatalf("sessions=%d dialog=%v status=%q", len(model.sessions), model.dialog, model.status)
+	}
+}
+
+func TestRunningSessionManagerRequiresInterruptBeforeArchive(t *testing.T) {
+	model := New(demo.New(), "")
+	model.screen = screenInbox
+	target := mango.Session{ID: "sesn_running", Title: "Running", Status: "running"}
+	model.openSessionManager(target, dialogNone)
+	model.sessionActionCursor = 2
+
+	updated, command := model.updateDialog(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	if command != nil || model.dialog != dialogSessionActions || model.err == nil ||
+		!strings.Contains(model.err.Error(), "interrupt active work") {
+		t.Fatalf("command=%v dialog=%v err=%v", command, model.dialog, model.err)
+	}
+	model.sessionActionCursor = 1
+	updated, _ = model.updateDialog(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	if model.dialog != dialogInterruptSession || model.dialogCursor != 1 {
+		t.Fatalf("interrupt dialog=%v cursor=%d", model.dialog, model.dialogCursor)
+	}
+}
+
+func TestDeletingAttachedSessionReturnsToInbox(t *testing.T) {
+	backend := demo.New()
+	sessions, err := backend.ListSessions(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := New(backend, "")
+	model.width, model.height, model.screen = 120, 36, screenChat
+	model.sessions = sessions
+	model.session = &model.sessions[0]
+	model.threads = []mango.Thread{{ID: "sthr_primary"}}
+	model.openSessionManager(*model.session, dialogNone)
+	model.sessionActionCursor = 3
+
+	updated, _ := model.updateDialog(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	updated, _ = model.updateDialog(tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft}))
+	model = updated.(Model)
+	updated, command := model.updateDialog(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	updated, _ = model.Update(command())
+	model = updated.(Model)
+	if model.screen != screenInbox || model.session != nil || len(model.threads) != 0 || model.dialog != dialogNone {
+		t.Fatalf("screen=%v session=%v threads=%d dialog=%v", model.screen, model.session, len(model.threads), model.dialog)
+	}
+}
+
 func TestWideSessionCursorAndLayoutStayInsideLeftConversation(t *testing.T) {
 	model := New(demo.New(), "")
 	model.loading = false

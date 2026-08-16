@@ -151,6 +151,10 @@ func (m Model) dialogEditorY() int {
 func (m Model) dialogFilterY() int {
 	// Border + top padding + title + rule + blank line.
 	const contentStart = 5
+	if m.dialog == dialogRenameSession {
+		// Session identity, blank line, then the title field.
+		return contentStart + 3
+	}
 	if m.dialog != dialogNewSession {
 		return contentStart
 	}
@@ -191,7 +195,8 @@ func (m Model) composerHeight() int {
 func (m Model) dialogIsOverlay() bool {
 	return m.dialog == dialogCommands || m.dialog == dialogAgents || m.dialog == dialogInterrupt ||
 		m.dialog == dialogNewSession || m.dialog == dialogSessions || m.dialog == dialogAction ||
-		m.dialog == dialogResult || m.dialog == dialogHelp || m.dialog == dialogQuit
+		m.dialog == dialogResult || m.dialog == dialogHelp || m.dialog == dialogQuit ||
+		m.sessionManagerDialog()
 }
 
 func (m Model) dialogUsesEditor() bool {
@@ -212,7 +217,7 @@ func (m Model) dialogUsesEditor() bool {
 
 func (m Model) dialogUsesFilter() bool {
 	switch m.dialog {
-	case dialogCommands, dialogAgents, dialogSessions:
+	case dialogCommands, dialogAgents, dialogSessions, dialogRenameSession:
 		return true
 	case dialogNewSession:
 		return m.creation.step == createChooseAgent || m.creation.step == createChooseEnvironment
@@ -513,9 +518,9 @@ func (m *Model) renderFeedItem(item feed.Item, selected bool, width int) string 
 func (m Model) renderInbox() string {
 	width, height := max(1, m.width), max(1, m.height)
 	main := m.renderInboxMain(width, height-2)
-	helpText := "←→ pill  ↑↓ list  enter select  n new  / find  r refresh  esc disconnect  ? help"
+	helpText := "←→ pill  ↑↓ list  enter open  m manage  n new  / find  r refresh  esc disconnect  ? help"
 	if width < 90 {
-		helpText = "←→ pill  ↑↓ list  enter select  n new  esc"
+		helpText = "←→ pill  ↑↓ list  enter open  m manage  n new  esc"
 	}
 	help := m.theme.dim.Render(helpText)
 	fleet := m.renderInboxFleetSummary()
@@ -688,7 +693,7 @@ func (m Model) renderInboxPreview(width, height int) string {
 	if session.ID != "" && session.ID == m.lastAttachedID {
 		rows = append(rows, "", m.theme.active.Render("⤴ recently attached"))
 	}
-	rows = append(rows, "", m.theme.dim.Render("enter to attach"))
+	rows = append(rows, "", m.theme.dim.Render("enter attach · m manage"))
 	body := strings.Join(rows, "\n")
 	return lipgloss.NewStyle().Width(width).Height(height).Padding(0, 1).
 		Border(lipgloss.RoundedBorder()).BorderForeground(m.theme.border).Render(body)
@@ -902,12 +907,14 @@ func (m Model) renderDialog() string {
 		content = m.renderCreationSearch(m.inboxFilter, "Type to filter Sessions") + "\n\n" +
 			strings.Join(rows, "\n") + "\n\n" +
 			m.theme.dim.Render(m.dialogHint(
-				"type filter  ↑↓ choose  enter open  ctrl+n new  esc", "type  ↑↓ choose  enter open  ctrl+n new"))
+				"type filter  ↑↓ choose  enter open  ctrl+e manage  ctrl+n new  esc", "type  ↑↓ choose  enter open  ctrl+e manage"))
 		if m.loading {
 			content += "\n\n" + m.activity("Opening Session")
 		} else if m.err != nil {
 			content += "\n\n" + m.theme.danger.Render(trimOneLine(m.err.Error(), width-8))
 		}
+	case dialogSessionActions, dialogRenameSession, dialogInterruptSession, dialogArchiveSession, dialogDeleteSession:
+		title, content = m.renderSessionManagerDialog(innerWidth)
 	case dialogHelp:
 		title = "Keyboard help"
 		helpLines := []string{
@@ -916,6 +923,7 @@ func (m Model) renderDialog() string {
 			"  shift+enter  insert a newline",
 			"  ctrl+n       create a Session",
 			"  ctrl+s       search Sessions",
+			"  m / ctrl+e   manage selected Session",
 			"  ctrl+p       command palette",
 			"  ctrl+g       switch Agent view",
 			"",
