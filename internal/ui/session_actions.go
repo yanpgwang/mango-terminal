@@ -189,12 +189,12 @@ func (m Model) handleSessionMutation(msg sessionMutationDone) (tea.Model, tea.Cm
 	}
 	switch msg.kind {
 	case mutationRename:
-		m.updateSessionSnapshot(msg.session)
+		listCommand := m.updateSessionSnapshot(msg.session)
 		m.sessionAction = msg.session
 		m.status = "Session renamed"
 		m.dialog = dialogSessionActions
 		m.filter.Blur()
-		return m, nil
+		return m, listCommand
 	case mutationInterrupt:
 		m.status = "interrupt requested"
 		m.closeSessionManager()
@@ -206,7 +206,7 @@ func (m Model) handleSessionMutation(msg sessionMutationDone) (tea.Model, tea.Cm
 		}
 		removedID := msg.sessionID
 		attachedTarget := m.session != nil && m.session.ID == removedID
-		m.removeSessionSnapshot(removedID)
+		listCommand := m.removeSessionSnapshot(removedID)
 		if attachedTarget {
 			m.stopStream()
 			m.session = nil
@@ -224,12 +224,12 @@ func (m Model) handleSessionMutation(msg sessionMutationDone) (tea.Model, tea.Cm
 		m.sessionActionParent = dialogNone
 		m.status, m.err = label, nil
 		m.resize()
-		return m, nil
+		return m, listCommand
 	}
 	return m, nil
 }
 
-func (m *Model) updateSessionSnapshot(updated mango.Session) {
+func (m *Model) updateSessionSnapshot(updated mango.Session) tea.Cmd {
 	for index := range m.sessions {
 		if m.sessions[index].ID == updated.ID {
 			m.sessions[index] = updated
@@ -238,9 +238,10 @@ func (m *Model) updateSessionSnapshot(updated mango.Session) {
 	if m.session != nil && m.session.ID == updated.ID {
 		*m.session = updated
 	}
+	return m.syncInboxList()
 }
 
-func (m *Model) removeSessionSnapshot(id string) {
+func (m *Model) removeSessionSnapshot(id string) tea.Cmd {
 	filtered := m.sessions[:0]
 	for _, session := range m.sessions {
 		if session.ID != id {
@@ -251,6 +252,7 @@ func (m *Model) removeSessionSnapshot(id string) {
 	if m.screen == screenInbox {
 		m.inboxCursor = clamp(m.inboxCursor, 0, max(0, len(m.sessions)+2))
 	}
+	return m.syncInboxList()
 }
 
 func (m Model) renderSessionManagerDialog(innerWidth int) (string, string) {

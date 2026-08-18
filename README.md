@@ -68,8 +68,9 @@ API keys are never written there.
 
 ## Controls
 
-The main flow uses arrow keys, `Enter`, and `Esc`. In an attached Session:
+The main flow uses arrow keys, `Enter`, and `Esc`. Useful shortcuts:
 
+- On the Session browser, `/` opens the inline fuzzy filter; `Esc` clears it.
 - `Tab` cycles through the composer, conversation, and Subagent workspace.
 - `Enter` opens a selected child transcript; replies still go to the
   coordinator.

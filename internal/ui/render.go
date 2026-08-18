@@ -107,20 +107,29 @@ func (m Model) viewCursor() *tea.Cursor {
 		xOffset, yOffset = layout.inputX, layout.inputY
 	} else {
 		if m.focus != focusEditor {
-			return nil
+			if m.screen != screenInbox || !m.inboxList.SettingFilter() {
+				return nil
+			}
 		}
-		if m.screen != screenChat {
-			return nil
+		if m.screen == screenInbox && m.inboxList.SettingFilter() {
+			source = m.inboxList.FilterInput.Cursor()
+			// Toolbar (2 rows), blank separator (1), then the list panel's
+			// border and padding (2). The filter starts at the panel's x=3.
+			xOffset, yOffset = 3, 5
+		} else {
+			if m.screen != screenChat {
+				return nil
+			}
+			source = m.editor.Cursor()
+			above := []string{
+				m.renderSessionHeader(m.width),
+				m.renderConversationViewport(m.workspaceMainWidth()),
+				m.renderConversationInfo(m.workspaceMainWidth()),
+			}
+			// The composer is part of the left workspace column. The right rail has
+			// no bearing on its native terminal cursor or IME anchor.
+			yOffset = lipgloss.Height(strings.Join(above, "\n"))
 		}
-		source = m.editor.Cursor()
-		above := []string{
-			m.renderSessionHeader(m.width),
-			m.renderConversationViewport(m.workspaceMainWidth()),
-			m.renderConversationInfo(m.workspaceMainWidth()),
-		}
-		// The composer is part of the left workspace column. The right rail has
-		// no bearing on its native terminal cursor or IME anchor.
-		yOffset = lipgloss.Height(strings.Join(above, "\n"))
 	}
 	if source == nil {
 		return nil
@@ -193,6 +202,10 @@ func (m *Model) resize() {
 	chatHeight := max(3, m.height-headerHeight-composerHeight-2)
 	m.chat.SetWidth(innerWidth)
 	m.chat.SetHeight(chatHeight)
+	if !m.inboxListMatchesSessions() {
+		m.syncInboxList()
+	}
+	m.resizeInboxList()
 	m.refreshChatMetrics()
 }
 
@@ -586,9 +599,14 @@ func (m *Model) renderFeedItem(item feed.Item, selected bool, width int) string 
 func (m Model) renderInbox() string {
 	width, height := max(1, m.width), max(1, m.height)
 	main := m.renderInboxMain(width, height-2)
-	helpText := "←→ pill  ↑↓ list  enter open  m manage  n new  / find  r refresh  esc disconnect  ? help"
+	helpText := "←→ pill/page  ↑↓ list  enter open  m manage  n new  / find  r refresh  esc disconnect  ? help"
 	if width < 90 {
 		helpText = "←→ pill  ↑↓ list  enter open  m manage  n new  esc"
+	}
+	if m.inboxList.SettingFilter() {
+		helpText = "type to filter  enter apply  esc cancel"
+	} else if m.inboxList.IsFiltered() {
+		helpText = "↑↓ choose  enter open  m manage  esc clear filter  / find again"
 	}
 	help := m.theme.dim.Render(helpText)
 	fleet := m.renderInboxFleetSummary()
@@ -655,7 +673,8 @@ func (m Model) renderInboxToolbar() string {
 	labels := []string{"+ New", "/ Find", "↻ Refresh"}
 	pills := make([]string, 0, 3)
 	for index, label := range labels {
-		pills = append(pills, choice(m.theme, label, m.inboxCursor == index, false))
+		selected := m.inboxCursor == index || index == 1 && (m.inboxList.SettingFilter() || m.inboxList.IsFiltered())
+		pills = append(pills, choice(m.theme, label, selected, false))
 	}
 	return strings.Join(pills, "  ")
 }
@@ -669,58 +688,13 @@ func (m Model) renderInboxList(width, height int) string {
 			m.theme.active.Render("n") + m.theme.dim.Render(" to start one.")
 		return m.renderInboxPanel(width, height, body)
 	}
-	contentWidth := max(20, width-6)
-	rows := make([]string, 0, len(m.sessions))
-	rowHeight := 2
-	visible := max(2, (height-1)/(rowHeight+1))
-	visible = min(visible, len(m.sessions))
-	listCursor := m.inboxCursor - 3
-	if listCursor < 0 {
-		listCursor = 0
-	}
-	start, end := visibleRange(len(m.sessions), listCursor, visible)
-	now := time.Now()
-	for index := start; index < end; index++ {
-		rows = append(rows, m.renderInboxSessionRow(m.sessions[index], contentWidth, index+3 == m.inboxCursor, now))
-	}
-	body := strings.Join(rows, "\n\n")
-	return m.renderInboxPanel(width, height, body)
-}
-
-// renderInboxSessionRow renders one durable Session as a two-line entry. The
-// first line carries the state pip, title, and a small marker if this is the
-// Session the user just detached from. The second line packs Agent identity,
-// subagent-count, and relative activity so a glance separates a live turn from
-// an idle Session.
-func (m Model) renderInboxSessionRow(session mango.Session, contentWidth int, selected bool, now time.Time) string {
-	marker := "  "
-	titleStyle := lipgloss.NewStyle().Foreground(m.theme.text)
-	if selected {
-		marker, titleStyle = "› ", m.theme.active
-	}
-	pip := sessionStatePip(m.theme, session.Status)
-	returnMark := ""
-	if session.ID != "" && session.ID == m.lastAttachedID {
-		returnMark = "  " + m.theme.active.Render("⤴")
-	}
-	nameWidth := max(12, contentWidth-ansi.StringWidth(marker)-ansi.StringWidth(pip)-1-
-		ansi.StringWidth(ansi.Strip(returnMark))-1-ansi.StringWidth(stateText(m.theme, session.Status))-1)
-	name := truncate(first(session.Title, session.Agent.Name, session.ID), nameWidth)
-	head := marker + pip + " " + titleStyle.Render(name) + "  " + stateText(m.theme, session.Status) + returnMark
-
-	metaParts := []string{first(session.Agent.Name, "Agent")}
-	if model := strings.TrimSpace(session.Agent.Model.ID); model != "" {
-		metaParts = append(metaParts, model)
-	}
-	if children := subagentCount(session); children > 0 {
-		metaParts = append(metaParts, fmt.Sprintf("%d sub-agents", children))
-	}
-	if since := humanizeSince(recency(session), now); since != "" {
-		metaParts = append(metaParts, since)
-	}
-	metaParts = append(metaParts, shortID(session.ID))
-	meta := strings.Join(metaParts, " · ")
-	return head + "\n    " + m.theme.dim.Render(trimOneLine(meta, contentWidth-4))
+	browser := m.inboxList
+	browser.SetSize(max(1, width-6), max(1, height-4))
+	browser.SetDelegate(sessionListDelegate{
+		theme: m.theme, lastAttachedID: m.lastAttachedID,
+		focused: m.inboxCursor >= 3, now: time.Now(),
+	})
+	return m.renderInboxPanel(width, height, browser.View())
 }
 
 // renderInboxPreview is the right-side detail card shown on wide terminals.
@@ -730,11 +704,15 @@ func (m Model) renderInboxPreview(width, height int) string {
 	if m.inboxCursor < 3 {
 		return m.renderToolbarHelpCard(width, height)
 	}
-	index := m.inboxCursor - 3
-	if index < 0 || index >= len(m.sessions) {
+	session, ok := m.selectedInboxSession()
+	if !ok {
+		if m.inboxList.SettingFilter() || m.inboxList.IsFiltered() {
+			body := m.theme.title.Render("No matching Session") + "\n\n" +
+				m.theme.dim.Render("Keep typing, or press Esc to clear the filter.")
+			return m.renderInboxPanel(width, height, body)
+		}
 		return lipgloss.NewStyle().Width(width).Height(height).Render("")
 	}
-	session := m.sessions[index]
 	inner := max(4, width-6)
 	status := stateText(m.theme, session.Status)
 	if since := humanizeSince(recency(session), time.Now()); since != "" {

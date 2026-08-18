@@ -36,10 +36,18 @@ Sleep 2s
 Escape
 Sleep 1s
 
-# Connect, inspect a durable Session, and open a child Agent transcript.
+# Connect, use the inline fuzzy filter, then inspect a durable Session.
 Enter
 Sleep 3s
-Down@350ms 2
+Type "/"
+Sleep 1s
+Type "launch"
+Sleep 1s
+Enter
+Sleep 2s
+Escape
+Sleep 1s
+Down
 Sleep 2s
 Enter
 Sleep 4s

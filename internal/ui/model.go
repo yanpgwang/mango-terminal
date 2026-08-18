@@ -119,6 +119,7 @@ type Model struct {
 	sessions            []mango.Session
 	inboxCursor         int
 	inboxFilter         string
+	inboxList           sessionBrowser
 	lastAttachedID      string
 	railCursor          int
 	sessionAction       mango.Session
@@ -208,6 +209,7 @@ func NewWithOptions(backend mango.Backend, directAttach string, options Options)
 	filter.SetStyles(filterStyles)
 	filter.Blur()
 	connect := newConnectState(options, t)
+	inboxList := newSessionBrowser(t)
 
 	chat := viewport.New()
 	chat.SoftWrap = true
@@ -224,7 +226,7 @@ func NewWithOptions(backend mango.Backend, directAttach string, options Options)
 		previews: map[string]*preview{}, unread: map[string]int{},
 		expanded: map[string]bool{}, itemCursor: -1,
 		fresh: map[string]int{}, markdown: newMarkdownState(),
-		chat: chat, editor: editor, filter: filter, spinner: work, theme: t, connect: connect,
+		chat: chat, editor: editor, filter: filter, inboxList: inboxList, spinner: work, theme: t, connect: connect,
 		loading: directAttach != "", loadingLabel: loadingLabel, follow: true,
 		directAttach: directAttach, windowFocused: true, options: options,
 	}
@@ -291,7 +293,9 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.sessions = fleetOrder(msg.sessions)
 			m.status, m.screen = "connected", screenInbox
 			m.inboxCursor = clamp(m.inboxCursor, 0, max(2, len(m.sessions)+2))
-			return m, m.saveSelectedEndpoint()
+			listCommand := m.syncInboxList()
+			m.resizeInboxList()
+			return m, tea.Batch(listCommand, m.saveSelectedEndpoint())
 		} else {
 			m.screen, m.status = screenConnect, "connection failed"
 		}
@@ -473,6 +477,9 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screen == screenConnect {
 			return m.updateConnectPaste(msg)
 		}
+		if m.screen == screenInbox && m.inboxList.SettingFilter() {
+			return m, m.updateInboxList(msg)
+		}
 		return m, nil
 	case tea.MouseWheelMsg:
 		if m.screen != screenChat || m.dialog != dialogNone {
@@ -493,6 +500,9 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, command
 	}
+	if m.screen == screenInbox {
+		return m, m.updateInboxList(message)
+	}
 	return m, nil
 }
 
@@ -501,40 +511,38 @@ func (m Model) updateConnect(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateInbox(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.inboxList.SettingFilter() {
+		return m, m.updateInboxList(key)
+	}
 	switch key.String() {
 	case "left", "h":
 		if m.inboxCursor < 3 {
 			m.inboxCursor = wrap(m.inboxCursor-1, 3)
+			return m, nil
 		}
-		return m, nil
 	case "right", "l":
 		if m.inboxCursor < 3 {
 			m.inboxCursor = wrap(m.inboxCursor+1, 3)
+			return m, nil
 		}
-		return m, nil
 	case "up", "k":
 		if m.inboxCursor >= 3 {
-			if m.inboxCursor == 3 {
+			if m.inboxList.Index() == 0 {
 				// Leaving the top of the Session list snaps back onto the
 				// toolbar. Landing on the first pill keeps the "left is where
 				// I started" mental model consistent across sessions.
 				m.inboxCursor = 0
-			} else {
-				m.inboxCursor--
+				return m, nil
 			}
 		}
-		return m, nil
 	case "down", "j":
 		if m.inboxCursor < 3 {
-			if len(m.sessions) > 0 {
+			if len(m.inboxList.VisibleItems()) > 0 {
+				m.inboxList.GoToStart()
 				m.inboxCursor = 3
 			}
 			return m, nil
 		}
-		if m.inboxCursor-3 < len(m.sessions)-1 {
-			m.inboxCursor++
-		}
-		return m, nil
 	case "ctrl+s":
 		m.openSessions()
 		return m, nil
@@ -554,9 +562,8 @@ func (m Model) updateInbox(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.loading, m.loadingLabel, m.err = true, "Refreshing Sessions", nil
 		return m, m.loadInbox()
 	case "m":
-		index := m.inboxCursor - 3
-		if index >= 0 && index < len(m.sessions) {
-			m.openSessionManager(m.sessions[index], dialogNone)
+		if session, ok := m.selectedInboxSession(); ok {
+			m.openSessionManager(session, dialogNone)
 		}
 		return m, nil
 	case "enter":
@@ -567,25 +574,29 @@ func (m Model) updateInbox(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case 0:
 			return m.startNewSession()
 		case 1:
-			m.openSessions()
-			return m, nil
+			return m, m.beginInboxFilter()
 		case 2:
 			m.loading, m.loadingLabel, m.err = true, "Refreshing Sessions", nil
 			return m, m.loadInbox()
 		default:
-			index := m.inboxCursor - 3
-			if index < 0 || index >= len(m.sessions) {
+			session, ok := m.selectedInboxSession()
+			if !ok {
 				return m, nil
 			}
 			m.loading, m.loadingLabel, m.err = true, "Opening Session", nil
-			return m, m.attach(m.sessions[index].ID)
+			return m, m.attach(session.ID)
 		}
 	case "/":
-		m.openSessions()
-		return m, nil
+		return m, m.beginInboxFilter()
 	case "esc":
+		if m.inboxList.IsFiltered() {
+			return m, m.updateInboxList(key)
+		}
 		m.screen, m.status, m.err = screenConnect, "disconnected", nil
 		return m, nil
+	}
+	if m.inboxCursor >= 3 {
+		return m, m.updateInboxList(key)
 	}
 	return m, nil
 }

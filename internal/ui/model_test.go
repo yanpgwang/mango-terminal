@@ -229,6 +229,67 @@ func TestInboxPreviewSummarizesSelectedSession(t *testing.T) {
 	}
 }
 
+func TestInboxBubblesListOwnsNavigationPaginationAndFilter(t *testing.T) {
+	model := New(demo.New(), "")
+	model.width, model.height, model.screen, model.inboxCursor = 150, 20, screenInbox, 3
+	model.sessions = make([]mango.Session, 8)
+	for index := range model.sessions {
+		model.sessions[index] = mango.Session{
+			ID:     fmt.Sprintf("sesn_%d", index),
+			Title:  fmt.Sprintf("Session %d", index),
+			Status: "idle",
+			Agent:  mango.Agent{Name: "coordinator"},
+		}
+	}
+	model.sessions[6].Title = "Reviewer launch room"
+	model.sessions[6].Agent.Name = "reviewer"
+	model.resize()
+
+	for range 4 {
+		updated, _ := model.updateInbox(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+		model = updated.(Model)
+	}
+	selected, ok := model.selectedInboxSession()
+	if !ok || selected.ID != "sesn_4" || model.inboxList.Paginator.Page == 0 {
+		t.Fatalf("selection=%q page=%d cursor=%d", selected.ID, model.inboxList.Paginator.Page, model.inboxCursor)
+	}
+
+	model.inboxCursor = 1
+	updated, _ := model.updateInbox(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	if !model.inboxList.SettingFilter() || model.dialog != dialogNone || model.viewCursor() == nil {
+		t.Fatalf("filtering=%v dialog=%v cursor=%v", model.inboxList.SettingFilter(), model.dialog, model.viewCursor())
+	}
+	if view := ansi.Strip(model.renderInbox()); !strings.Contains(view, "Find Sessions") {
+		t.Fatalf("filter input is not visible: %q", view)
+	}
+
+	model.inboxList.SetFilterText("reviewer")
+	model.updateInboxList(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	selected, ok = model.selectedInboxSession()
+	if !ok || selected.ID != "sesn_6" || !model.inboxList.IsFiltered() {
+		t.Fatalf("filtered selection=%q state=%v", selected.ID, model.inboxList.FilterState())
+	}
+	if view := ansi.Strip(model.renderInbox()); !strings.Contains(view, "FILTER  reviewer") ||
+		!strings.Contains(view, "Reviewer launch room") {
+		t.Fatalf("applied filter is not visible: %q", view)
+	}
+	model.inboxList.SetFilterText("does-not-exist")
+	model.updateInboxList(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if _, ok := model.selectedInboxSession(); ok {
+		t.Fatal("a filter with no matches retained an invisible Session selection")
+	}
+	if preview := ansi.Strip(model.renderInboxPreview(58, 12)); !strings.Contains(preview, "No matching Session") {
+		t.Fatalf("no-match preview=%q", preview)
+	}
+
+	updated, _ = model.updateInbox(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	model = updated.(Model)
+	if model.screen != screenInbox || model.inboxList.FilterState().String() != "unfiltered" {
+		t.Fatalf("screen=%v filter=%v", model.screen, model.inboxList.FilterState())
+	}
+}
+
 func TestSessionManagerRenamesAndDeletesWithSafeConfirmation(t *testing.T) {
 	backend := demo.New()
 	sessions, err := backend.ListSessions(context.Background())
