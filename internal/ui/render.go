@@ -667,9 +667,9 @@ func (m Model) renderInboxList(width, height int) string {
 	if len(m.sessions) == 0 {
 		body := m.theme.dim.Render("No durable Sessions yet. Press ") +
 			m.theme.active.Render("n") + m.theme.dim.Render(" to start one.")
-		return lipgloss.NewStyle().Width(width).Height(height).Padding(0, 2).Render(body)
+		return m.renderInboxPanel(width, height, body)
 	}
-	contentWidth := max(20, width-4)
+	contentWidth := max(20, width-6)
 	rows := make([]string, 0, len(m.sessions))
 	rowHeight := 2
 	visible := max(2, (height-1)/(rowHeight+1))
@@ -684,7 +684,7 @@ func (m Model) renderInboxList(width, height int) string {
 		rows = append(rows, m.renderInboxSessionRow(m.sessions[index], contentWidth, index+3 == m.inboxCursor, now))
 	}
 	body := strings.Join(rows, "\n\n")
-	return lipgloss.NewStyle().Width(width).Height(height).Padding(0, 2).Render(body)
+	return m.renderInboxPanel(width, height, body)
 }
 
 // renderInboxSessionRow renders one durable Session as a two-line entry. The
@@ -735,7 +735,7 @@ func (m Model) renderInboxPreview(width, height int) string {
 		return lipgloss.NewStyle().Width(width).Height(height).Render("")
 	}
 	session := m.sessions[index]
-	inner := max(4, width-4)
+	inner := max(4, width-6)
 	status := stateText(m.theme, session.Status)
 	if since := humanizeSince(recency(session), time.Now()); since != "" {
 		status += m.theme.dim.Render(" · " + since)
@@ -790,7 +790,7 @@ func (m Model) renderInboxPreview(width, height int) string {
 // cursor is currently sitting on. It fills the right column when no Session
 // is highlighted so the pane never renders as dead space.
 func (m Model) renderToolbarHelpCard(width, height int) string {
-	inner := max(4, width-4)
+	inner := max(4, width-6)
 	title := "Getting started"
 	body := "Move the cursor down to inspect a Session, or press Enter on a pill."
 	switch m.inboxCursor {
@@ -817,7 +817,8 @@ func (m Model) renderInboxPanel(width, height int, content string) string {
 		prefix := probe[:index]
 		content = strings.ReplaceAll(content, ansi.ResetStyle, ansi.ResetStyle+prefix)
 	}
-	return background.Width(width).Height(height).Padding(1, 2).Render(content)
+	return background.Width(width).Height(height).Padding(1, 2).
+		Border(lipgloss.RoundedBorder()).BorderForeground(m.theme.panel).Render(content)
 }
 
 func (m Model) previewSection(label string) string {
