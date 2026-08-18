@@ -200,7 +200,7 @@ func (m *Model) resizeInboxList() {
 	if !m.compact && width >= 120 && len(m.sessions) > 0 {
 		panelWidth = width * 55 / 100
 	}
-	m.inboxList.SetSize(max(1, panelWidth-6), max(1, gridHeight-4))
+	m.inboxList.SetSize(max(1, panelWidth-4), max(1, gridHeight-2))
 }
 
 func renderInboxSessionRow(t theme, lastAttachedID string, session mango.Session, contentWidth int, selected bool, now time.Time) string {

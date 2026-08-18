@@ -113,9 +113,9 @@ func (m Model) viewCursor() *tea.Cursor {
 		}
 		if m.screen == screenInbox && m.inboxList.SettingFilter() {
 			source = m.inboxList.FilterInput.Cursor()
-			// Toolbar (2 rows), blank separator (1), then the list panel's
-			// border and padding (2). The filter starts at the panel's x=3.
-			xOffset, yOffset = 3, 5
+			// Toolbar (2 rows), blank separator (1), then the shared surface's
+			// top/left padding (1/2). The filter starts at x=2, y=4.
+			xOffset, yOffset = 2, 4
 		} else {
 			if m.screen != screenChat {
 				return nil
@@ -627,10 +627,10 @@ func (m Model) renderInboxMain(width, height int) string {
 	var grid string
 	if twoColumn {
 		listWidth := width * 55 / 100
-		previewWidth := width - listWidth - 2
+		previewWidth := width - listWidth
 		list := m.renderInboxList(listWidth, gridHeight)
 		preview := m.renderInboxPreview(previewWidth, gridHeight)
-		grid = lipgloss.JoinHorizontal(lipgloss.Top, list, "  ", preview)
+		grid = lipgloss.JoinHorizontal(lipgloss.Top, list, preview)
 	} else {
 		grid = m.renderInboxList(width, gridHeight)
 	}
@@ -689,7 +689,7 @@ func (m Model) renderInboxList(width, height int) string {
 		return m.renderInboxPanel(width, height, body)
 	}
 	browser := m.inboxList
-	browser.SetSize(max(1, width-6), max(1, height-4))
+	browser.SetSize(max(1, width-4), max(1, height-2))
 	browser.SetDelegate(sessionListDelegate{
 		theme: m.theme, lastAttachedID: m.lastAttachedID,
 		focused: m.inboxCursor >= 3, now: time.Now(),
@@ -713,7 +713,7 @@ func (m Model) renderInboxPreview(width, height int) string {
 		}
 		return lipgloss.NewStyle().Width(width).Height(height).Render("")
 	}
-	inner := max(4, width-6)
+	inner := max(4, width-4)
 	status := stateText(m.theme, session.Status)
 	if since := humanizeSince(recency(session), time.Now()); since != "" {
 		status += m.theme.dim.Render(" · " + since)
@@ -768,7 +768,7 @@ func (m Model) renderInboxPreview(width, height int) string {
 // cursor is currently sitting on. It fills the right column when no Session
 // is highlighted so the pane never renders as dead space.
 func (m Model) renderToolbarHelpCard(width, height int) string {
-	inner := max(4, width-6)
+	inner := max(4, width-4)
 	title := "Getting started"
 	body := "Move the cursor down to inspect a Session, or press Enter on a pill."
 	switch m.inboxCursor {
@@ -795,8 +795,9 @@ func (m Model) renderInboxPanel(width, height int, content string) string {
 		prefix := probe[:index]
 		content = strings.ReplaceAll(content, ansi.ResetStyle, ansi.ResetStyle+prefix)
 	}
-	return background.Width(width).Height(height).Padding(1, 2).
-		Border(lipgloss.RoundedBorder()).BorderForeground(m.theme.panel).Render(content)
+	// Both columns use the same edge-to-edge surface. Their padding creates
+	// breathing room without splitting the browser into bordered cards.
+	return background.Width(width).Height(height).Padding(1, 2).Render(content)
 }
 
 func (m Model) previewSection(label string) string {

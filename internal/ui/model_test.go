@@ -215,8 +215,11 @@ func TestInboxPreviewSummarizesSelectedSession(t *testing.T) {
 	model.resize()
 
 	preview := ansi.Strip(model.renderInboxPreview(58, 30))
-	if !strings.Contains(preview, "╭") || !strings.Contains(preview, "╯") {
-		t.Fatalf("preview is missing its rounded panel silhouette: %q", preview)
+	if strings.ContainsAny(preview, "╭╮╰╯│") {
+		t.Fatalf("preview still renders a card border: %q", preview)
+	}
+	if lipgloss.Width(preview) != 58 || lipgloss.Height(preview) != 30 {
+		t.Fatalf("preview dimensions=%dx%d", lipgloss.Width(preview), lipgloss.Height(preview))
 	}
 	for _, want := range []string{
 		"Ship the managed Agent launch", "idle · 4m ago", "AGENT", "coordinator", "claude-sonnet-4-5",
