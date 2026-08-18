@@ -1,43 +1,48 @@
 # Mango
 
-Mango is a terminal window into durable managed Agents. It is not a local
-coding harness: execution, tools, sandboxes, memory, and orchestration remain
-in the cloud while this client connects, observes, creates, responds, and
-detaches.
+**A terminal control surface for durable managed Agents.**
 
-This repository is a clean implementation against the public
-`managed-agent-go` HTTP and event-stream contract. Models, tools, sandboxes,
-memory, and execution remain on the Mango control plane.
+Mango connects to a remote Managed Agents control plane so you can create,
+observe, guide, and detach from long-running Agent Sessions without moving
+execution into your terminal. Tools, sandboxes, memory, models, and
+orchestration remain in the cloud.
 
-## Try it now
+![Mango terminal demo](docs/assets/mango-demo.gif)
 
-No server is required for the interactive demo:
+## What it gives you
+
+- One workspace for the coordinator, child Agents, transcripts, usage, unread
+  work, delegation state, and pending actions.
+- Durable Session lifecycle management: create, find, attach, rename,
+  interrupt, archive, delete, and safely detach while work continues.
+- Live HTTP/SSE projection with streaming previews, persisted-event
+  deduplication, and whole-roster reconnection when a child stream ends.
+- Guarded approval and tool-result dialogs that preserve the owning child
+  Thread and its server-visible event ID.
+- Responsive wide and compact layouts, real terminal cursors for CJK IMEs,
+  optional motion, and opt-in background notifications.
+
+## Try the built-in demo
+
+No server is required:
 
 ```sh
 go run ./cmd/mango --demo
 ```
 
-Or use the built binary:
-
-```sh
-go build -o bin/mango ./cmd/mango
-./bin/mango --demo
-```
-
-The demo starts at the same central Connect screen as a real control plane and
-includes a coordinator, two child Agents, delegation events, a tool call, and
-a child-owned permission request. It uses the same state projection and action
-code as a real server connection.
+The demo uses the production UI and state projection with an in-memory
+backend. It includes a coordinator, two active child Agents, delegation and
+tool events, an undelegated roster member, and a child-owned permission gate.
 
 ## Connect to Mango
 
-The default control plane is `http://127.0.0.1:8080`:
+Mango defaults to `http://127.0.0.1:8080`:
 
 ```sh
 go run ./cmd/mango
 ```
 
-Connect elsewhere or attach directly to one durable Session:
+Connect to another control plane or attach directly to a durable Session:
 
 ```sh
 MANGO_URL=https://mango.example.com \
@@ -45,103 +50,52 @@ MANGO_API_KEY=your-key \
 go run ./cmd/mango attach sesn_...
 ```
 
-Equivalent flags are `--url` and `--api-key`. Finite API requests time out
-after 30 seconds; long-lived event streams are governed by their attachment
-context and reconnect independently.
+Equivalent flags are `--url` and `--api-key`. The selected endpoint is
+remembered in `mango/connection.json` under the user configuration directory;
+API keys are never written there.
 
-The welcome screen probes the configured, saved, and common local endpoints
-without delaying the UI. Press `Enter` on Endpoint to open the picker, use
-`Up`/`Down` and `Enter` to select, then press `Enter` on Connect. Press `e` to
-add an `http://` or `https://` endpoint manually. A successful connection is
-remembered in the user configuration directory as `mango/connection.json`;
-API keys are never written to that file.
+## Controls
 
-## Interaction
+The main flow uses arrow keys, `Enter`, and `Esc`. In an attached Session:
 
-The normal path is visible on screen and does not require memorizing commands:
+- `Tab` cycles through the composer, conversation, and Subagent workspace.
+- `Enter` opens a selected child transcript; replies still go to the
+  coordinator.
+- `Space` previews a child without leaving the Subagent workspace.
+- `Ctrl+P`, `Ctrl+G`, `Ctrl+S`, and `Ctrl+N` open commands, Agents, Session
+  search, and Session creation.
+- `Ctrl+C` exits Mango without stopping remote work.
 
-1. The framed Mango welcome uses a gently animated cloud scene and an endpoint
-   picker. It detects saved and common local candidates, accepts a manual URL,
-   validates the connection, and remembers the successful selection.
-2. The home screen lists `Create a new Session`, `Find a Session`, `Refresh
-   from Cloud`, and every durable Session.
-   Press `m` on a Session to rename it, interrupt all active work, archive it,
-   or permanently delete it and its event history. Destructive operations open
-   with the safe choice selected, and running Sessions must be interrupted
-   before archive or deletion.
-3. New Session is a sequence of searchable dialogs: Agent, Environment,
-   Session details, review. `Create a new Agent` and `Create a cloud
-   Environment` are ordinary choices in those lists.
-4. An attached Session opens one workspace: the coordinator conversation stays
-   on the left while a focusable Subagent workspace on the right shows every
-   live child, undelegated roster member, latest activity, usage, unread work,
-   and pending action. Opening a child swaps only the left transcript; the rail
-   remains visible.
-5. `Esc` returns to the Session home without interrupting remote work.
+Use `--no-motion` or `MANGO_NO_MOTION=1` for static rendering. Notifications
+are disabled by default; opt in with `--notify bell` or `--notify osc777`.
 
-The editor appears only inside an attached Session or a form that genuinely
-needs text. User messages always target the coordinator because the Managed
-Agents API does not accept a user message targeted directly at a child Thread.
-When a child transcript is open, the footer makes that routing explicit and
-`Esc` returns to the coordinator before leaving the Session.
+## Built with
 
-Arrow keys choose or scroll, `Enter` selects or sends, and `Esc` closes or goes
-back. Those three keys cover the main product. On wide terminals, `Tab` cycles
-through the composer, conversation, and Subagent workspace; `Enter` opens a
-child transcript, `Space` previews it without leaving the rail, and `x` opens
-an explicit child interrupt confirmation. `Ctrl+P`, `Ctrl+G`, `Ctrl+S`, and
-`Ctrl+N` remain optional accelerators for commands, Agents, Session search, and
-creation. The command palette exposes the same Session management flow while
-attached. `Ctrl+C` exits the terminal without stopping remote work.
+- The public `managed-agent-go` HTTP and event-stream contract.
+- [Bubble Tea v2](https://github.com/charmbracelet/bubbletea) for the terminal
+  application runtime.
+- [Bubbles v2](https://github.com/charmbracelet/bubbles) for editors, search,
+  scrolling, and activity components.
+- [Lip Gloss v2](https://github.com/charmbracelet/lipgloss) for responsive
+  layout and styling.
+- [Glamour](https://github.com/charmbracelet/glamour) for terminal Markdown.
 
-Every searchable picker and text editor uses a real terminal cursor from the
-Bubble Tea v2 components. This gives Chinese/Japanese/Korean IMEs a stable
-candidate-window anchor instead of a painted fake cursor.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the protocol, projection, and UI
+boundaries.
 
-At 120×30 and above, the Subagent workspace is a dedicated right column. It
-absorbs the useful parts of a task footer—status, task, elapsed activity, tokens,
-and unread work—then adds Mango-specific Thread transcripts, undelegated roster
-members, child-owned approvals, and per-child interruption. Below that size it
-collapses into a one-line roster strip and the searchable Agent picker remains
-available. Permission and external-tool gates use guarded decision dialogs so
-an in-flight keystroke cannot accidentally approve work.
+## Development
 
-Mango has a small motion language of its own: a privacy-safe rotating fruit
-signal while an Agent thinks, in-place streaming with a live caret, and a
-short-lived spark on newly durable Agent events.
-Use `--no-motion` or `MANGO_NO_MOTION=1` for a static presentation.
+```sh
+go test ./...
+go build -o bin/mango ./cmd/mango
+vhs demo/welcome.tape
+```
 
-Background notification escape sequences are disabled by default because
-unsupported terminals may print them literally. Opt in with `--notify bell`
-for the portable terminal bell or `--notify osc777` when the terminal is known
-to support OSC 777. `MANGO_NOTIFY` provides the same setting. Focused windows
-never notify.
-
-## Protocol behavior
-
-Mango treats Thread event ledgers as the source of truth:
-
-- attach opens every known Thread SSE stream before listing history, then
-  deduplicates persisted events by ID;
-- `event_start` and `event_delta` are projected as ephemeral live previews;
-- final `agent.message` events replace previews with the same ID;
-- tool results are paired back into their original tool calls;
-- child action copies on the primary ledger retain their client-visible event
-  ID and `session_thread_id` routing hint;
-- `session.thread_created` triggers roster discovery and a clean reattach, so
-  there is no continuous API poll;
-- if any child Thread stream ends, the aggregate subscription reconnects all
-  Threads with bounded exponential backoff rather than silently losing one
-  Agent.
-
-Terminals below 60×20 show a bounded resize prompt instead of wrapping dialogs
-or corrupting the screen.
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the state model.
+The VHS tape records the README GIF to `docs/assets/` and an MP4 copy to the
+ignored `dist/` directory. It uses Menlo with explicit terminal metrics so the
+recording is reproducible on macOS.
 
 ## Install a release
-
-On macOS or Linux:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/yanpgwang/mango-terminal/main/install.sh | sh

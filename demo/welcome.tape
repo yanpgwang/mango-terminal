@@ -1,8 +1,11 @@
-Output dist/mango-endpoint-demo.gif
+Output docs/assets/mango-demo.gif
+Output dist/mango-demo.mp4
 
 Set Shell "zsh"
-Set FontFamily "JetBrains Mono"
+Set FontFamily "Menlo"
 Set FontSize 16
+Set LetterSpacing 0
+Set LineHeight 1.2
 Set Width 1440
 Set Height 900
 Set Theme "TokyoNightStorm"
@@ -17,26 +20,37 @@ Type "env -u NO_COLOR ./bin/mango --demo"
 Enter
 Sleep 3s
 
-# Open the endpoint picker and browse the automatically discovered choices.
-Enter
-Sleep 2s
-Down@350ms 2
+# Browse the discovered endpoints, then return to the built-in demo.
+Up@250ms 2
+Sleep 1s
+Down@250ms 2
 Sleep 1s
 
-# Show manual endpoint entry, then return without changing the demo target.
+# Preview manual endpoint entry without changing the selected demo target.
 Type "e"
 Sleep 1s
 Type "https://mango.example.com"
 Sleep 2s
 Escape
 Sleep 1s
-Up@350ms 2
-Enter
-Sleep 1s
 
-# The final Enter validates the selected endpoint and enters Mango.
+# Connect, inspect a durable Session, and open a child Agent transcript.
+Enter
+Sleep 3s
+Down@350ms 2
+Sleep 2s
 Enter
 Sleep 4s
+
+Escape
+Sleep 2s
+Tab@350ms 2
+Down
+Sleep 1s
+Enter
+Sleep 3s
+Escape
+Sleep 1s
 
 Ctrl+C
 Sleep 1s
