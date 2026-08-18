@@ -22,12 +22,24 @@ orchestration remain in the cloud.
 - Responsive wide and compact layouts, real terminal cursors for CJK IMEs,
   optional motion, and opt-in background notifications.
 
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/yanpgwang/mango-terminal/main/install.sh | sh
+```
+
+Then launch Mango directly:
+
+```sh
+mango
+```
+
 ## Try the built-in demo
 
 No server is required:
 
 ```sh
-go run ./cmd/mango --demo
+mango --demo
 ```
 
 The demo uses the production UI and state projection with an in-memory
@@ -39,7 +51,7 @@ tool events, an undelegated roster member, and a child-owned permission gate.
 Mango defaults to `http://127.0.0.1:8080`:
 
 ```sh
-go run ./cmd/mango
+mango
 ```
 
 Connect to another control plane or attach directly to a durable Session:
@@ -47,7 +59,7 @@ Connect to another control plane or attach directly to a durable Session:
 ```sh
 MANGO_URL=https://mango.example.com \
 MANGO_API_KEY=your-key \
-go run ./cmd/mango attach sesn_...
+mango attach sesn_...
 ```
 
 Equivalent flags are `--url` and `--api-key`. The selected endpoint is
@@ -88,18 +100,13 @@ boundaries.
 ```sh
 go test ./...
 go build -o bin/mango ./cmd/mango
+go run ./cmd/mango --demo
 vhs demo/welcome.tape
 ```
 
 The VHS tape records the README GIF to `docs/assets/` and an MP4 copy to the
 ignored `dist/` directory. It uses Menlo with explicit terminal metrics so the
 recording is reproducible on macOS.
-
-## Install a release
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/yanpgwang/mango-terminal/main/install.sh | sh
-```
 
 ## License
 

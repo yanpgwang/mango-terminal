@@ -736,32 +736,52 @@ func (m Model) renderInboxPreview(width, height int) string {
 	}
 	session := m.sessions[index]
 	inner := max(4, width-6)
-	title := m.theme.title.Render(truncate(first(session.Title, "Untitled Session"), inner))
+	status := stateText(m.theme, session.Status)
+	if since := humanizeSince(recency(session), time.Now()); since != "" {
+		status += m.theme.dim.Render(" · " + since)
+	}
+	titleWidth := max(8, inner-lipgloss.Width(status)-2)
+	title := m.theme.title.Render(truncate(first(session.Title, "Untitled Session"), titleWidth))
+	header := joinSides(title, status, inner)
 	rule := m.theme.dim.Render(strings.Repeat("─", inner))
-	rows := []string{title, stateText(m.theme, session.Status), rule}
-	rows = append(rows, m.previewField("Agent", first(session.Agent.Name, "unknown"), inner))
+	rows := []string{header, rule, "", m.previewSection("Agent")}
+	agent := m.theme.title.Render(first(session.Agent.Name, "unknown"))
 	if model := strings.TrimSpace(session.Agent.Model.ID); model != "" {
-		rows = append(rows, m.previewField("Model", model, inner))
+		agent += m.theme.dim.Render("  ·  " + truncate(model, max(4, inner-lipgloss.Width(agent)-5)))
 	}
+	rows = append(rows, agent)
 	if env := strings.TrimSpace(session.EnvironmentID); env != "" {
-		rows = append(rows, m.previewField("Environment", shortID(env), inner))
+		rows = append(rows, m.theme.dim.Render("Environment  ")+truncate(env, max(4, inner-13)))
 	}
-	rows = append(rows, m.previewField("Sub-agents", m.previewSubagentsValue(session), inner))
-	if session.Usage.InputTokens+session.Usage.OutputTokens > 0 {
-		rows = append(rows, m.previewField("Tokens",
-			compactTokens(session.Usage.InputTokens)+" in  /  "+compactTokens(session.Usage.OutputTokens)+" out", inner))
+
+	roster := previewRosterNames(session)
+	rows = append(rows, "", m.previewSection(fmt.Sprintf("Subagents · %d", len(roster))))
+	if len(roster) == 0 {
+		rows = append(rows, m.theme.dim.Render("Single-Agent Session"))
+	} else {
+		rows = append(rows, truncate(strings.Join(roster, "  ·  "), inner))
+	}
+
+	usage := []string{}
+	if session.Usage.InputTokens > 0 {
+		usage = append(usage, compactTokens(session.Usage.InputTokens)+" in")
+	}
+	if session.Usage.OutputTokens > 0 {
+		usage = append(usage, compactTokens(session.Usage.OutputTokens)+" out")
 	}
 	if session.Stats.ActiveSeconds > 0 {
-		rows = append(rows, m.previewField("Active", fmt.Sprintf("%.1fs", session.Stats.ActiveSeconds), inner))
+		usage = append(usage, fmt.Sprintf("%.1fs active", session.Stats.ActiveSeconds))
 	}
-	if since := humanizeSince(recency(session), time.Now()); since != "" {
-		rows = append(rows, m.previewField("Activity", since, inner))
+	if len(usage) > 0 {
+		rows = append(rows, "", m.previewSection("Usage"), truncate(strings.Join(usage, "  ·  "), inner))
 	}
-	rows = append(rows, m.previewField("ID", shortID(session.ID), inner))
+
+	rows = append(rows, "", m.previewSection("Session"), truncate(session.ID, inner))
 	if session.ID != "" && session.ID == m.lastAttachedID {
-		rows = append(rows, "", m.theme.active.Render("⤴ recently attached"))
+		rows = append(rows, m.theme.active.Render("⤴ recently attached"))
 	}
-	rows = append(rows, "", m.theme.dim.Render("enter attach · m manage"))
+	rows = append(rows, "", m.theme.active.Render("enter")+m.theme.dim.Render(" attach   ·   ")+
+		m.theme.active.Render("m")+m.theme.dim.Render(" manage"))
 	body := strings.Join(rows, "\n")
 	return lipgloss.NewStyle().Width(width).Height(height).Padding(0, 1).
 		Border(lipgloss.RoundedBorder()).BorderForeground(m.theme.border).Render(body)
@@ -789,22 +809,34 @@ func (m Model) renderToolbarHelpCard(width, height int) string {
 		Border(lipgloss.RoundedBorder()).BorderForeground(m.theme.border).Render(content)
 }
 
-func (m Model) previewField(label, value string, width int) string {
-	if strings.TrimSpace(value) == "" {
-		return ""
-	}
-	labelWidth := 12
-	label = m.theme.dim.Render(fmt.Sprintf("%-*s", labelWidth, label))
-	value = truncate(value, max(4, width-labelWidth-2))
-	return label + "  " + value
+func (m Model) previewSection(label string) string {
+	return m.theme.dim.Bold(true).Render(strings.ToUpper(label))
 }
 
-func (m Model) previewSubagentsValue(session mango.Session) string {
-	roster := subagentCount(session)
-	if roster == 0 {
-		return "single Agent"
+func previewRosterNames(session mango.Session) []string {
+	if session.Agent.Multiagent == nil {
+		return nil
 	}
-	return fmt.Sprintf("%d in roster", roster)
+	names := []string{}
+	seenIDs, seenNames := map[string]bool{}, map[string]bool{}
+	for _, reference := range session.Agent.Multiagent.Agents {
+		if reference.ID != "" && reference.ID == session.Agent.ID {
+			continue
+		}
+		name := strings.TrimSpace(reference.Name)
+		if name == "" {
+			name = shortID(reference.ID)
+		}
+		if name == "" || seenIDs[reference.ID] || seenNames[name] {
+			continue
+		}
+		if reference.ID != "" {
+			seenIDs[reference.ID] = true
+		}
+		seenNames[name] = true
+		names = append(names, name)
+	}
+	return names
 }
 
 func sessionStatePip(t theme, status string) string {

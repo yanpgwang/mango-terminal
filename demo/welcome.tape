@@ -15,8 +15,10 @@ Set PlaybackSpeed 1
 
 Env TERM "xterm-256color"
 Env COLORTERM "truecolor"
+Env NO_COLOR ""
+Env PATH "./bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
-Type "env -u NO_COLOR ./bin/mango --demo"
+Type "mango --demo"
 Enter
 Sleep 3s
 

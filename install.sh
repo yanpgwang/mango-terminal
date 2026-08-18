@@ -66,6 +66,6 @@ install -m 0755 "${temporary_directory}/mango" "${install_directory}/mango"
 
 echo "Installed mango ${release} to ${install_directory}/mango"
 case ":${PATH}:" in
-  *":${install_directory}:"*) ;;
+  *":${install_directory}:"*) echo "Run 'mango' to connect or 'mango --demo' to explore locally." ;;
   *) echo "Add ${install_directory} to PATH before running mango." ;;
 esac

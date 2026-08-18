@@ -194,6 +194,38 @@ func TestCompactSessionCollapsesWorkspaceIntoAgentStrip(t *testing.T) {
 	}
 }
 
+func TestInboxPreviewSummarizesSelectedSession(t *testing.T) {
+	model := New(demo.New(), "")
+	model.width, model.height, model.screen, model.inboxCursor = 150, 42, screenInbox, 3
+	session := mango.Session{
+		ID:            "sesn_product_launch",
+		Title:         "Ship the managed Agent launch",
+		Status:        "idle",
+		UpdatedAt:     time.Now().Add(-4 * time.Minute),
+		EnvironmentID: "env_demo_cloud",
+		Usage:         mango.Usage{InputTokens: 18420, OutputTokens: 3286},
+		Stats:         mango.Stats{ActiveSeconds: 147.8},
+	}
+	session.Agent.ID, session.Agent.Name, session.Agent.Model.ID = "agent_coordinator", "coordinator", "claude-sonnet-4-5"
+	session.Agent.Multiagent = &mango.Multiagent{Agents: []mango.AgentReference{
+		{ID: "agent_researcher", Name: "researcher"},
+		{ID: "agent_reviewer", Name: "reviewer"},
+	}}
+	model.sessions = []mango.Session{session}
+	model.resize()
+
+	preview := ansi.Strip(model.renderInboxPreview(58, 30))
+	for _, want := range []string{
+		"Ship the managed Agent launch", "idle · 4m ago", "AGENT", "coordinator", "claude-sonnet-4-5",
+		"env_demo_cloud", "SUBAGENTS · 2", "researcher  ·  reviewer", "USAGE", "18.4K in", "3.3K out",
+		"147.8s active", "SESSION", "sesn_product_launch", "enter attach", "m manage",
+	} {
+		if !strings.Contains(preview, want) {
+			t.Fatalf("preview missing %q: %q", want, preview)
+		}
+	}
+}
+
 func TestSessionManagerRenamesAndDeletesWithSafeConfirmation(t *testing.T) {
 	backend := demo.New()
 	sessions, err := backend.ListSessions(context.Background())
