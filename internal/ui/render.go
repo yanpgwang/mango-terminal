@@ -735,7 +735,7 @@ func (m Model) renderInboxPreview(width, height int) string {
 		return lipgloss.NewStyle().Width(width).Height(height).Render("")
 	}
 	session := m.sessions[index]
-	inner := max(4, width-6)
+	inner := max(4, width-4)
 	status := stateText(m.theme, session.Status)
 	if since := humanizeSince(recency(session), time.Now()); since != "" {
 		status += m.theme.dim.Render(" · " + since)
@@ -783,15 +783,14 @@ func (m Model) renderInboxPreview(width, height int) string {
 	rows = append(rows, "", m.theme.active.Render("enter")+m.theme.dim.Render(" attach   ·   ")+
 		m.theme.active.Render("m")+m.theme.dim.Render(" manage"))
 	body := strings.Join(rows, "\n")
-	return lipgloss.NewStyle().Width(width).Height(height).Padding(0, 1).
-		Border(lipgloss.RoundedBorder()).BorderForeground(m.theme.border).Render(body)
+	return m.renderInboxPanel(width, height, body)
 }
 
 // renderToolbarHelpCard shows a short explanation for the pill the operator's
 // cursor is currently sitting on. It fills the right column when no Session
 // is highlighted so the pane never renders as dead space.
 func (m Model) renderToolbarHelpCard(width, height int) string {
-	inner := max(4, width-6)
+	inner := max(4, width-4)
 	title := "Getting started"
 	body := "Move the cursor down to inspect a Session, or press Enter on a pill."
 	switch m.inboxCursor {
@@ -805,8 +804,20 @@ func (m Model) renderToolbarHelpCard(width, height int) string {
 	head := m.theme.title.Render(truncate(title, inner))
 	rule := m.theme.dim.Render(strings.Repeat("─", inner))
 	content := head + "\n" + rule + "\n" + m.theme.dim.Render(lipgloss.NewStyle().Width(inner).Render(body))
-	return lipgloss.NewStyle().Width(width).Height(height).Padding(0, 1).
-		Border(lipgloss.RoundedBorder()).BorderForeground(m.theme.border).Render(content)
+	return m.renderInboxPanel(width, height, content)
+}
+
+func (m Model) renderInboxPanel(width, height int, content string) string {
+	background := lipgloss.NewStyle().Background(m.theme.panel)
+	// Child styles end with a full SGR reset. Re-enter the panel background
+	// after each reset so nested foreground colors do not punch terminal-colored
+	// rectangles through the filled panel.
+	probe := background.Render("x")
+	if index := strings.IndexByte(probe, 'x'); index > 0 {
+		prefix := probe[:index]
+		content = strings.ReplaceAll(content, ansi.ResetStyle, ansi.ResetStyle+prefix)
+	}
+	return background.Width(width).Height(height).Padding(1, 2).Render(content)
 }
 
 func (m Model) previewSection(label string) string {
