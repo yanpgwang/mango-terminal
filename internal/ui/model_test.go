@@ -293,6 +293,36 @@ func TestInboxBubblesListOwnsNavigationPaginationAndFilter(t *testing.T) {
 	}
 }
 
+func TestInboxToolbarBalancesFleetStatusAboveSpacedHelp(t *testing.T) {
+	model := New(demo.New(), "")
+	model.width, model.height, model.screen = 150, 36, screenInbox
+	model.sessions = []mango.Session{
+		{ID: "sesn_running", Title: "Running", Status: "running"},
+		{ID: "sesn_idle", Title: "Idle", Status: "idle"},
+	}
+	model.resize()
+
+	lines := strings.Split(ansi.Strip(model.renderInbox()), "\n")
+	actionLine, helpLine := -1, -1
+	for index, line := range lines {
+		if strings.Contains(line, "+ New") {
+			actionLine = index
+			if !strings.Contains(line, "CONNECTED") || !strings.Contains(line, "1 running") || !strings.Contains(line, "1 idle") {
+				t.Fatalf("toolbar status is not balanced on the action row: %q", line)
+			}
+		}
+		if strings.Contains(line, "pill/page") {
+			helpLine = index
+			if strings.Contains(line, "CONNECTED") {
+				t.Fatalf("fleet status remained in the footer: %q", line)
+			}
+		}
+	}
+	if actionLine < 0 || helpLine < 1 || strings.TrimSpace(lines[helpLine-1]) != "" {
+		t.Fatalf("actionLine=%d helpLine=%d linesBeforeHelp=%q", actionLine, helpLine, lines[max(0, helpLine-1)])
+	}
+}
+
 func TestSessionManagerRenamesAndDeletesWithSafeConfirmation(t *testing.T) {
 	backend := demo.New()
 	sessions, err := backend.ListSessions(context.Background())

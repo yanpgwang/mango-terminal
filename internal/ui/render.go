@@ -598,7 +598,7 @@ func (m *Model) renderFeedItem(item feed.Item, selected bool, width int) string 
 
 func (m Model) renderInbox() string {
 	width, height := max(1, m.width), max(1, m.height)
-	main := m.renderInboxMain(width, height-2)
+	main := m.renderInboxMain(width, height-3)
 	helpText := "←→ pill/page  ↑↓ list  enter open  m manage  n new  / find  r refresh  esc disconnect  ? help"
 	if width < 90 {
 		helpText = "←→ pill  ↑↓ list  enter open  m manage  n new  esc"
@@ -609,15 +609,19 @@ func (m Model) renderInbox() string {
 		helpText = "↑↓ choose  enter open  m manage  esc clear filter  / find again"
 	}
 	help := m.theme.dim.Render(helpText)
-	fleet := m.renderInboxFleetSummary()
-	footer := lipgloss.NewStyle().Width(width).Padding(0, 2).Render(joinSides(help, fleet, width-4))
-	return lipgloss.NewStyle().Width(width).Height(height).Render(main + "\n" + footer)
+	footer := lipgloss.NewStyle().Width(width).Padding(0, 2).Render(help)
+	return lipgloss.NewStyle().Width(width).Height(height).Render(main + "\n\n" + footer)
 }
 
 func (m Model) renderInboxMain(width, height int) string {
 	// Toolbar sits at the very top of the interactive area — nothing above it
 	// except the terminal's own top margin.
-	toolbar := lipgloss.NewStyle().Padding(1, 2, 0, 2).Render(m.renderInboxToolbar())
+	innerWidth := max(1, width-4)
+	actions := m.renderInboxToolbar()
+	statusWidth := max(1, innerWidth-ansi.StringWidth(actions)-2)
+	status := truncate(m.renderInboxFleetSummary(), statusWidth)
+	toolbarLine := joinSides(actions, status, innerWidth)
+	toolbar := lipgloss.NewStyle().Width(width).Padding(1, 2, 0, 2).Render(toolbarLine)
 
 	used := lipgloss.Height(toolbar) + 1 // toolbar + blank line
 	gridHeight := max(6, height-used)
@@ -637,9 +641,9 @@ func (m Model) renderInboxMain(width, height int) string {
 	return strings.Join([]string{toolbar, "", grid}, "\n")
 }
 
-// renderInboxFleetSummary is the compact fleet status the footer shows on the
-// right. Loading and error states hijack it because their signal outranks the
-// steady-state counts anyway.
+// renderInboxFleetSummary is the compact fleet status shown opposite the
+// toolbar actions. Loading and error states hijack it because their signal
+// outranks the steady-state counts anyway.
 func (m Model) renderInboxFleetSummary() string {
 	if m.loading {
 		return m.activity(first(m.loadingLabel, "Refreshing Sessions"))
